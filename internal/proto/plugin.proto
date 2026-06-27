@@ -1,0 +1,168 @@
+// Plugin protocol for tau. Defines the gRPC contract between the tau host
+// (this Go module) and external plugin processes (standalone Go binaries
+// built via go-plugin).
+//
+// The host acts as gRPC client for the Plugin service; the plugin acts as
+// gRPC server for Plugin. The plugin acts as gRPC client for the Host
+// service; the host acts as gRPC server for Host. go-plugin negotiates the
+// bidirectional connection over a single anonymous Unix-domain socket.
+//
+// Code generation: see the `proto` target in ../../Makefile. Generated
+// *.pb.go and *_grpc.pb.go files are committed so consumers do not need a
+// working `protoc` to build tau.
+syntax = "proto3";
+
+package tau.v1;
+
+option go_package = "github.com/coevin/tau/internal/proto;tauplugin";
+
+// ProtocolVersion is the single source of truth for the wire-format version
+// of the plugin protocol. It is announced by the plugin in its Handshake
+// response and verified by the host. Bumping this constant is a breaking
+// change and requires a tau minor-version bump.
+//
+// History:
+//   1 = initial release (this change).
+//
+// Keep in sync with internal/plugins/handshake.go.
+message ProtocolVersion {
+  int32 version = 1;
+}
+
+// ToolSchema is the JSON Schema descriptor a plugin advertises for one of
+// its tools. The host merges these with built-in tool schemas and includes
+// the union in every LLM Request.Tools.
+message ToolSchema {
+  // name is the un-namespaced tool name as the plugin exposes it
+  // (e.g. "status" for the git plugin). The host namespaces it as
+  // "<plugin>.<name>" when registering with the agent's tool registry.
+  string name = 1;
+  // description is the model-facing description of the tool's behavior.
+  string description = 2;
+  // json_schema is the input JSON Schema (draft 2020-12) serialized to a
+  // string. Carrying the schema as a string keeps the proto free of a
+  // recursive JSON-Schema-as-proto-schema definition and matches the
+  // existing internal/tools.Tool.Parameters() shape.
+  string json_schema = 3;
+}
+
+// ContentBlock is a polymorphic piece of a tool result. Mirrors the
+// internal/tools.ToolResult.Content shape: a list of typed blocks. Exactly
+// one variant field is set per block.
+message ContentBlock {
+  oneof variant {
+    TextBlock text = 1;
+    ImageBlock image = 2;
+    JsonBlock json = 3;
+  }
+}
+
+message TextBlock {
+  string text = 1;
+}
+
+message ImageBlock {
+  // mime_type is an image MIME type ("image/png", "image/jpeg", etc.).
+  string mime_type = 1;
+  // data is the raw image bytes; the host base64-encodes for transport.
+  bytes data = 2;
+}
+
+// JsonBlock carries structured data the host renders as a fenced code block.
+message JsonBlock {
+  // json is the serialized JSON payload.
+  string json = 1;
+}
+
+// ToolCall is the host→plugin invocation.
+message ToolCall {
+  // id is the request identifier assigned by the model. The plugin should
+  // not interpret it; it is echoed back in the ToolResult for state-tree
+  // bookkeeping.
+  string id = 1;
+  // name is the un-namespaced tool name as advertised by the plugin.
+  string name = 2;
+  // args is the raw JSON arguments object from the model. The plugin is
+  // responsible for validating it against its declared schema.
+  bytes args = 3;
+  // cwd is the agent's current working directory. The plugin should scope
+  // filesystem operations to this directory or below.
+  string cwd = 4;
+}
+
+// ToolResult is the plugin→host response.
+message ToolResult {
+  // call_id echoes the ToolCall.id.
+  string call_id = 1;
+  // is_error marks the result as an error. The host surfaces this verbatim
+  // in the agent's tool-result message; the model treats it as a failure.
+  bool is_error = 2;
+  // content is the list of typed content blocks.
+  repeated ContentBlock content = 3;
+}
+
+// Empty is the conventional empty request/response type.
+message Empty {}
+
+// Plugin is the service the host calls. The plugin implements it.
+service Plugin {
+  // Handshake is the first RPC after the gRPC connection is established.
+  // The plugin reports its ProtocolVersion; the host rejects mismatched
+  // versions without calling ListTools.
+  rpc Handshake(Empty) returns (ProtocolVersion);
+
+  // ListTools returns the plugin's full tool catalog. The host caches the
+  // result for the plugin process lifetime and re-validates on restart.
+  rpc ListTools(Empty) returns (stream ToolSchema);
+
+  // Execute runs a single tool call. The plugin is responsible for
+  // enforcing any per-tool timeouts; the host enforces a host-side
+  // deadline via context cancellation.
+  rpc Execute(ToolCall) returns (ToolResult);
+
+  // Shutdown asks the plugin to drain in-flight work and exit cleanly.
+  // The host waits up to its grace period (5 seconds) before SIGKILL.
+  rpc Shutdown(Empty) returns (Empty);
+}
+
+// LogRequest is a plugin→host log message.
+message LogRequest {
+  enum Level {
+    LEVEL_UNSPECIFIED = 0;
+    LEVEL_INFO = 1;
+    LEVEL_WARN = 2;
+    LEVEL_ERROR = 3;
+    LEVEL_DEBUG = 4;
+  }
+  Level level = 1;
+  string message = 2;
+}
+
+// NotifyRequest is a plugin→host user-facing notification. The host routes
+// it to its event bus so the TUI / RPC consumer can surface it.
+message NotifyRequest {
+  // severity is "info" | "warning" | "error".
+  string severity = 1;
+  string message = 2;
+}
+
+// GetConfigRequest names a configuration key the plugin wants to read.
+message GetConfigRequest {
+  // key is dotted-path (e.g. "compaction.reserveTokens"). Plugins should
+  // not read secrets via this RPC; the host redacts known-sensitive keys.
+  string key = 1;
+}
+
+// GetConfigResponse carries the resolved value as a string. Empty string +
+  // found=false means the key was not present.
+message GetConfigResponse {
+  string value = 1;
+  bool found = 2;
+}
+
+// Host is the service the plugin calls. The host implements it.
+service Host {
+  rpc Log(LogRequest) returns (Empty);
+  rpc Notify(NotifyRequest) returns (Empty);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+}

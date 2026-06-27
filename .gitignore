@@ -1,0 +1,57 @@
+# Build artifacts
+/bin/
+/tau
+*.exe
+*.test
+
+# Stray `go build` outputs (accidental local builds of main packages
+# under cmd/ and examples/). `go build` deposits binaries at the module
+# root, which is also the git repo root; these patterns catch the leaks.
+/sdk-embed
+/sdk-custom-provider
+/plugin-git
+
+# Project-scope settings directory written by the runtime from cwd
+/.tau/
+
+# Go workspace files (we use module mode, not workspace mode)
+go.work
+go.work.sum
+
+# Vendored dependencies (we use the module proxy, not vendor mode)
+/vendor/
+
+# Coverage and profiling output
+coverage.out
+coverage.html
+*.prof
+cpu.out
+mem.out
+
+# Session state (bbolt) — never commit a user's conversation history
+*.bolt
+*.bolt.lock
+
+# Log files
+*.log
+
+# Local environment / secrets
+.env
+.env.local
+*.key
+credentials.json
+
+# IDE
+.idea/
+.vscode/
+.fleet/
+.zed/
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# OS clutter
+.DS_Store
+Thumbs.db
