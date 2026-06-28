@@ -529,6 +529,12 @@ func (s *AgentSession) Abort(reason string) {
 // manager is NOT shut down here — per the runtime factory contract, the
 // caller coordinates plugin subprocess lifetime.
 //
+// Store asymmetry: the runtime NEVER calls Close on SessionOptions.Store.
+// Unlike StateManager (which has a runtime-created default that Shutdown
+// closes when ownsState is true), Store has no default — nil means "no
+// store" — so there is nothing for the runtime to close. The embedder
+// owns the injected store's lifecycle.
+//
 // Subsequent Run calls return ErrRuntimeShutdown. Shutdown is idempotent
 // and safe to call concurrently with Run or Abort.
 func (s *AgentSession) Shutdown(ctx context.Context) error {

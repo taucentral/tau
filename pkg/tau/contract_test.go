@@ -1041,3 +1041,248 @@ func TestContractMiddlewareSentinelIdentity(t *testing.T) {
 		t.Error("ErrUnknownMiddlewareType is nil")
 	}
 }
+
+// --- Storage ----------------------------------------------------------------
+//
+// Contract coverage for the cross-session-storage capability spec.
+// Every requirement / scenario in
+// specs/cross-session-storage/spec.md has a corresponding assertion
+// here. The fixtures (FileStore in a temp dir, recordingStore wrapper)
+// are designed so embedders copying this test can swap in their own
+// Store implementation and the contract still holds.
+
+// recordingStore wraps a Store and records Close invocations. Used by
+// the lifecycle test to assert the runtime never calls Close on an
+// injected store. Every other method delegates verbatim.
+type recordingStore struct {
+	inner   Store
+	closeMu sync.Mutex
+	closes  int
+}
+
+func (r *recordingStore) Put(ctx context.Context, e Entry) error {
+	return r.inner.Put(ctx, e)
+}
+
+func (r *recordingStore) Query(ctx context.Context, q Query) ([]Entry, error) {
+	return r.inner.Query(ctx, q)
+}
+
+func (r *recordingStore) Close() error {
+	r.closeMu.Lock()
+	r.closes++
+	r.closeMu.Unlock()
+	return r.inner.Close()
+}
+
+func (r *recordingStore) closeCount() int {
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	return r.closes
+}
+
+// TestContractStorageStorePutQueryRoundTrip: inject a FileStore via
+// Options.Store, run a no-op turn to ensure the runtime accepts the
+// store, retrieve it via the Store() inspector, Put + Query, assert
+// round-trip succeeds.
+func TestContractStorageStorePutQueryRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	opts := contractOpts(t)
+	opts.Store = store
+
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sess.Run(ctx, "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := sess.Store()
+	if got == nil {
+		t.Fatal("Store() returned nil after a store was injected")
+	}
+	if err := got.Put(ctx, Entry{
+		ID:        "round-trip",
+		Text:      "round-trip body",
+		Timestamp: time.Now(),
+		Tags:      []string{"test"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	out, err := got.Query(ctx, Query{KeywordQuery: "round-trip"})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("Query returned %d, want 1", len(out))
+	}
+	if out[0].Text != "round-trip body" {
+		t.Errorf("Query text = %q, want %q", out[0].Text, "round-trip body")
+	}
+}
+
+// TestContractStorageLifecycleNotClosedOnShutdown: wrap a FileStore in
+// a recordingStore, inject via Options.Store, run a turn, Shutdown, and
+// assert the runtime did NOT call Close on the wrapper. This pins the
+// "embedder owns the injected store's lifecycle" contract.
+func TestContractStorageLifecycleNotClosedOnShutdown(t *testing.T) {
+	dir := t.TempDir()
+	inner, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	rec := &recordingStore{inner: inner}
+
+	opts := contractOpts(t)
+	opts.Store = rec
+
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sess.Run(ctx, "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := sess.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if got := rec.closeCount(); got != 0 {
+		t.Errorf("runtime called Close on injected store %d time(s); want 0 (embedder owns lifecycle)", got)
+	}
+
+	// The embedder is responsible for closing; doing so now MUST NOT
+	// panic or error.
+	if err := inner.Close(); err != nil {
+		t.Errorf("embedder-side Close: %v", err)
+	}
+}
+
+// TestContractStorageSentinelsTyped: the three storage sentinels
+// satisfy errors.Is identity. ErrUnsupportedQuery is also asserted to
+// be returned by FileStore.Query when EmbeddingQuery is set.
+func TestContractStorageSentinelsTyped(t *testing.T) {
+	for _, sentinel := range []error{
+		ErrStoreClosed,
+		ErrStoreReadOnly,
+		ErrUnsupportedQuery,
+	} {
+		if !errors.Is(sentinel, sentinel) {
+			t.Errorf("errors.Is(%v, %v) = false, want true", sentinel, sentinel)
+		}
+		if sentinel == nil {
+			t.Errorf("sentinel %v is nil", sentinel)
+		}
+	}
+
+	// FileStore triggers ErrUnsupportedQuery for embedding queries.
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	_, err = store.Query(context.Background(), Query{EmbeddingQuery: []float32{0.1, 0.2}})
+	if !errors.Is(err, ErrUnsupportedQuery) {
+		t.Errorf("FileStore embedding Query err = %v, want errors.Is(ErrUnsupportedQuery)", err)
+	}
+}
+
+// TestContractStorageSessionIsolation: two SDK sessions constructed
+// with Options.Store pointing at different FileStore directories see
+// only their own entries — cross-session isolation via configuration.
+// Writes through session A's Store() inspector MUST NOT be visible to
+// session B's Store() inspector. The runtime plays no part in the
+// isolation; it is enforced entirely by the configured directory.
+func TestContractStorageSessionIsolation(t *testing.T) {
+	storeA, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store A: %v", err)
+	}
+	defer storeA.Close()
+	storeB, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store B: %v", err)
+	}
+	defer storeB.Close()
+
+	optsA := contractOpts(t)
+	optsA.Store = storeA
+	sessA, err := CreateAgentSession(context.Background(), optsA)
+	if err != nil {
+		t.Fatalf("CreateAgentSession A: %v", err)
+	}
+	defer sessA.Shutdown(context.Background())
+
+	optsB := contractOpts(t)
+	optsB.Store = storeB
+	sessB, err := CreateAgentSession(context.Background(), optsB)
+	if err != nil {
+		t.Fatalf("CreateAgentSession B: %v", err)
+	}
+	defer sessB.Shutdown(context.Background())
+
+	// Sanity: both sessions expose the store that was injected.
+	storeFromA := sessA.Store()
+	if storeFromA == nil {
+		t.Fatal("session A Store() returned nil after a store was injected")
+	}
+	storeFromB := sessB.Store()
+	if storeFromB == nil {
+		t.Fatal("session B Store() returned nil after a store was injected")
+	}
+
+	ctx := context.Background()
+	if err := storeFromA.Put(ctx, Entry{
+		ID:        "only-in-a",
+		Text:      "A only",
+		Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatalf("Put via session A's store: %v", err)
+	}
+
+	// Session A sees its own entry through its Store() inspector.
+	outA, err := sessA.Store().Query(ctx, Query{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query via session A: %v", err)
+	}
+	if len(outA) != 1 || outA[0].ID != "only-in-a" {
+		t.Errorf("session A store = %v, want [only-in-a]", outA)
+	}
+
+	// Session B does NOT see session A's entry through its Store()
+	// inspector. The runtime does not auto-scope storage by session.
+	outB, err := sessB.Store().Query(ctx, Query{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query via session B: %v", err)
+	}
+	if len(outB) != 0 {
+		t.Errorf("session B store = %v, want [] (isolation by directory)", outB)
+	}
+}
+
+// TestContractStorageStoreInspectorReturnsNilWhenOmitted: a session
+// constructed without Options.Store returns nil from Store(). This
+// pins the "nil disables storage" contract.
+func TestContractStorageStoreInspectorReturnsNilWhenOmitted(t *testing.T) {
+	opts := contractOpts(t) // no Store set
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+	if got := sess.Store(); got != nil {
+		t.Errorf("Store() = %v, want nil (no store injected)", got)
+	}
+}

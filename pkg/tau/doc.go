@@ -96,6 +96,13 @@
 //   - ErrUnknownMiddlewareType  — CreateAgentSession rejected an
 //     Options.Middleware element that satisfied none of RequestMutator,
 //     ResponseObserver, or ToolInterceptor.
+//   - ErrStoreClosed            — Put / Query called after Close on a
+//     Store the embedder manages (re-exported from internal/storage).
+//   - ErrStoreReadOnly          — Put called on a read-only backend
+//     (re-exported from internal/storage; FileStore does not raise it).
+//   - ErrUnsupportedQuery       — Query asked for a shape the backend
+//     cannot satisfy, e.g. EmbeddingQuery against FileStore
+//     (re-exported from internal/storage).
 //
 // Provider Stream errors arrive as Final.Err on the event bus, not as
 // Run return values: the agent loop converts them into an
@@ -123,6 +130,57 @@
 //
 // See docs/input/context/plugin-support/whitepaper.md §3.2 for the
 // design rationale and docs/sdk/cookbook.md for runnable patterns.
+//
+// # Storage
+//
+// The Store interface is the SDK's extension point for cross-session
+// context. An embedder writes entries (decisions, facts, summaries)
+// during one turn and queries them in subsequent turns — even from a
+// different session. The reference backend is NewFileStore(dir); the
+// SDK accepts any Store implementation via Options.Store.
+//
+// The runtime does NOT auto-inject retrieved entries into the request
+// today. Embedders wire the retrieve-and-inject pattern themselves
+// with a RequestMutator that calls Store.Query and prepends the
+// matched entries to the request system prompt. See docs/sdk/cookbook.md
+// recipe (h) for a runnable pattern.
+//
+// Entry shape:
+//
+//	type Entry struct {
+//	    ID        string    // stable identifier; primary key
+//	    Text      string    // body
+//	    Tags      []string  // AND-matched by Query.TagsQuery
+//	    Embedding []float32 // optional dense vector
+//	    Timestamp time.Time // SinceQuery filter
+//	    Source    string    // provenance (session id, user id)
+//	}
+//
+// Query shape (zero-value fields ignored; match is the AND of every
+// non-zero field):
+//
+//	type Query struct {
+//	    KeywordQuery   string
+//	    EmbeddingQuery []float32
+//	    TagsQuery      []string
+//	    SinceQuery     time.Time
+//	    Limit          int
+//	}
+//
+// Lifecycle contract — embedder owns the injected store:
+//
+//   - Options.Store nil disables storage features (no default store).
+//   - The runtime NEVER calls Close on a store supplied via
+//     Options.Store. Unlike StateManager (which has a runtime-created
+//     default that the runtime closes on Shutdown), Store has no
+//     default — nil means "no store" — so there is nothing for the
+//     runtime to close. The embedder MUST Close the store when their
+//     process exits.
+//   - FileStore does NOT compute embeddings; Query.EmbeddingQuery
+//     returns ErrUnsupportedQuery. Vector-aware backends implement
+//     Store directly.
+//
+// Reference: docs/input/context/plugin-support/whitepaper.md §3.4.
 //
 // # Versioning
 //

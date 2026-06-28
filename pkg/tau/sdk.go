@@ -27,6 +27,7 @@ import (
 	"github.com/coevin/tau/internal/llm/provider/openai"
 	"github.com/coevin/tau/internal/plugins"
 	"github.com/coevin/tau/internal/slash"
+	"github.com/coevin/tau/internal/storage"
 	"github.com/coevin/tau/internal/state"
 	"github.com/coevin/tau/internal/tools"
 )
@@ -446,6 +447,24 @@ type Options struct {
 	// an empty slice disables middleware — the runtime takes a fast
 	// path with no observable overhead beyond a nil-slice check.
 	Middleware []any
+
+	// Store, when non-nil, exposes a cross-session context backend to
+	// the runtime. The runtime does NOT auto-inject retrieved entries
+	// into the request today; embedders retrieve via their own
+	// RequestMutator middleware (see docs/sdk/cookbook.md recipe (h))
+	// and inject the text they want. nil disables storage features.
+	//
+	// Lifecycle contract:
+	//   - The runtime does NOT call Close on a store supplied here.
+	//     The embedder owns the injected store's lifecycle. This is
+	//     the asymmetry with StateManager: StateManager has a runtime-
+	//     created default that the runtime closes on Shutdown; Store
+	//     has no default — nil means "no store" — so there is nothing
+	//     for the runtime to close.
+	//   - Construct via NewFileStore(dir) for the reference file-
+	//     backed backend; implement Store directly for vector / sqlite
+	//     / external backends.
+	Store Store
 }
 
 // --- Constructor and session handle ----------------------------------------
@@ -477,6 +496,7 @@ func CreateAgentSession(ctx context.Context, opts Options) (*AgentSession, error
 		SessionID:     opts.SessionID,
 		SlashCommands: opts.SlashCommands,
 		Middleware:    mw,
+		Store:         opts.Store,
 	}
 	rt, err := agent.CreateAgentSessionRuntime(ctx, opts.Cwd, so)
 	if err != nil {
@@ -692,6 +712,22 @@ func (s *AgentSession) SlashCommands() []string {
 	return out
 }
 
+// Store returns the cross-session context backend supplied at
+// construction, or nil if none was supplied. The returned value is the
+// same Store the caller passed via Options.Store; the runtime holds no
+// other reference and does not copy.
+//
+// Embedders use this inspector to retrieve entries from middleware
+// (RequestMutator) or from their own UI loop without retaining a
+// separate pointer. See docs/sdk/cookbook.md recipe (h) for the
+// retrieve-and-inject pattern.
+func (s *AgentSession) Store() Store {
+	if s == nil || s.rt == nil {
+		return nil
+	}
+	return s.rt.Options.Store
+}
+
 // NewInMemoryManager returns a StateManager that keeps the entire state
 // tree in memory and never writes to disk. Use it in tests and in
 // ephemeral sessions that should not persist (e.g., a one-shot batch
@@ -702,6 +738,23 @@ func (s *AgentSession) SlashCommands() []string {
 // caller owns its lifecycle.
 func NewInMemoryManager(cwd string) StateManager {
 	return state.NewInMemoryManager(cwd)
+}
+
+// NewFileStore returns the reference file-backed Store rooted at dir.
+// Each entry is persisted as a single markdown file (dir/<id>.md) with
+// YAML-style frontmatter; the directory is created with mode 0700 if
+// missing, and files are written with mode 0600. Writes are atomic
+// (staged to .tmp then renamed) under a per-store flock so concurrent
+// Puts and Queries are safe.
+//
+// FileStore does NOT compute embeddings — Query.EmbeddingQuery returns
+// ErrUnsupportedQuery. Embedders needing semantic similarity implement
+// Store directly against their vector backend.
+//
+// When injected via Options.Store, the runtime does NOT call Close on
+// the returned store — the caller owns its lifecycle.
+func NewFileStore(dir string) (Store, error) {
+	return storage.NewFileStore(dir)
 }
 
 // --- Convenience provider constructors --------------------------------------

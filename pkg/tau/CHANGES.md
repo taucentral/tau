@@ -10,6 +10,38 @@ versions track the Go module version in `go.mod`.
 
 ### Added
 
+- **Cross-session storage seam** — `Store` interface, `Entry` and
+  `Query` types, and three typed sentinels for the cross-session
+  context backend.
+  - `Store` exposes `Put(ctx, Entry) error`, `Query(ctx, Query)
+    ([]Entry, error)`, and `Close() error`. The runtime accepts any
+    `Store` via `Options.Store`; nil disables storage features.
+  - `Entry` carries `ID`, `Text`, `Tags`, `Embedding`, `Timestamp`,
+    `Source`. ID is the primary key — two Puts with the same ID
+    overwrite.
+  - `Query` selects by `KeywordQuery` (case-insensitive substring),
+    `EmbeddingQuery` (dense vector), `TagsQuery` (AND), `SinceQuery`
+    (timestamp), `Limit`. Zero-value fields are ignored; the match is
+    the AND of every non-zero field.
+  - `NewFileStore(dir)` re-exports the reference file-backed backend.
+    Each entry is one markdown file under `dir/<id>.md` with YAML-
+    style frontmatter; writes are atomic (staged to `.tmp` then
+    renamed under a per-store flock); file mode is `0600`, directory
+    mode is `0700`. FileStore does NOT compute embeddings —
+    `Query.EmbeddingQuery` returns `ErrUnsupportedQuery`.
+  - `AgentSession.Store() Store` inspector returns the store supplied
+    at construction, or nil when none was supplied. Mirrors the
+    ownership contract of `Tools()` (fresh value, not a pointer into
+    internal state).
+  - Typed sentinels `ErrStoreClosed`, `ErrStoreReadOnly`,
+    `ErrUnsupportedQuery`; all compatible with `errors.Is`.
+- **Lifecycle contract — embedder owns the injected store.** The
+  runtime NEVER calls `Close` on a store supplied via `Options.Store`.
+  Unlike `StateManager` (which has a runtime-created default that the
+  runtime closes on `Shutdown`), `Store` has no default — nil means
+  "no store" — so there is nothing for the runtime to close. The
+  embedder MUST `Close` the store when their process exits. Pinned by
+  `TestContractStorageLifecycleNotClosedOnShutdown`.
 - **Middleware seam** — three in-process extension hooks on the agent
   turn loop, registered via `Options.Middleware []any`:
   - `RequestMutator` mutates the outgoing `*Request` in place before

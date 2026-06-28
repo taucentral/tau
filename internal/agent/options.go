@@ -19,6 +19,7 @@ import (
 	"github.com/coevin/tau/internal/llm/tokencounter"
 	"github.com/coevin/tau/internal/plugins"
 	"github.com/coevin/tau/internal/state"
+	"github.com/coevin/tau/internal/storage"
 	"github.com/coevin/tau/internal/tools"
 )
 
@@ -144,6 +145,20 @@ type SessionOptions struct {
 	// runtime trusts the SDK's pre-validation; it never type-checks a
 	// MiddlewareSet element.
 	Middleware MiddlewareSet
+
+	// Store, when non-nil, exposes a cross-session context backend to
+	// the runtime. The runtime does NOT auto-inject retrieved entries
+	// into the request today (that is a follow-on change); embedders
+	// retrieve via their own RequestMutator middleware. nil disables
+	// storage features.
+	//
+	// Lifecycle contract:
+	//   - The runtime does NOT call Close on a store supplied here.
+	//     The embedder owns the injected store's lifecycle. Unlike
+	//     StateManager (which has a runtime-created default that the
+	//     runtime closes on Shutdown), Store has no default — nil means
+	//     "no store" — so there is nothing for the runtime to close.
+	Store storage.Store
 }
 
 // resolvedOptions is the post-defaults bundle the runtime actually
@@ -164,6 +179,7 @@ type resolvedOptions struct {
 	BuiltinTools  []tools.HeadlessTool
 	PluginManager *plugins.Manager
 	Middleware    MiddlewareSet
+	Store         storage.Store
 }
 
 // resolve applies defaults from Settings for any optional field that
@@ -185,6 +201,7 @@ func (o SessionOptions) resolve() resolvedOptions {
 		BuiltinTools:  o.Tools,
 		PluginManager: o.Plugins,
 		Middleware:    o.Middleware,
+		Store:         o.Store,
 	}
 	if r.ThinkingLevel == "" && o.Settings.DefaultThinkingLevel != nil {
 		r.ThinkingLevel = *o.Settings.DefaultThinkingLevel
