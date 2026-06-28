@@ -90,6 +90,18 @@ type Usage = llm.Usage
 // loop builds one per dispatch from the current state tree.
 type Request = llm.Request
 
+// Response is the completed assistant message returned by an LLM
+// provider for a single round-trip. The agent loop accumulates deltas
+// from LLMClient.Stream into an assistant Message; that Message —
+// complete with Role, Content blocks, StopReason, Usage, and any
+// provider IDs — IS the response. ResponseObserver middleware receive
+// a *Response pointing at this value after Stream returns.
+//
+// tau aliases Message rather than introducing a separate Response
+// struct because the two concepts are identical: the model's
+// "response" is the assistant message it produced for this turn.
+type Response = llm.Message
+
 // Delta is the sealed interface for incremental model-stream events.
 // Implementations: TextDelta, ToolCallDelta, UsageDelta, Final.
 type Delta = llm.Delta
@@ -422,6 +434,18 @@ type Options struct {
 	// reference and dispatch themselves. nil means SlashCommands() falls
 	// back to DefaultSlashRegistry().
 	SlashCommands *Registry
+
+	// Middleware, when non-empty, registers in-process hooks on the
+	// agent turn loop. Each element SHALL satisfy at least one of the
+	// RequestMutator, ResponseObserver, or ToolInterceptor interfaces;
+	// CreateAgentSession type-checks every element and returns
+	// ErrUnknownMiddlewareType for any element that satisfies none.
+	// The runtime partitions the slice into three typed slices
+	// (preserving registration order within each) and invokes each
+	// middleware at its documented intercept point during Run. nil or
+	// an empty slice disables middleware — the runtime takes a fast
+	// path with no observable overhead beyond a nil-slice check.
+	Middleware []any
 }
 
 // --- Constructor and session handle ----------------------------------------
@@ -434,6 +458,10 @@ type Options struct {
 // I/O. Filesystem access is limited to global config-directory resolution
 // when opts.ConfigDir is empty.
 func CreateAgentSession(ctx context.Context, opts Options) (*AgentSession, error) {
+	mw, err := partitionMiddleware(opts.Middleware)
+	if err != nil {
+		return nil, err
+	}
 	so := agent.SessionOptions{
 		Model:         opts.Model,
 		ThinkingLevel: opts.ThinkingLevel,
@@ -448,12 +476,92 @@ func CreateAgentSession(ctx context.Context, opts Options) (*AgentSession, error
 		ConfigDir:     opts.ConfigDir,
 		SessionID:     opts.SessionID,
 		SlashCommands: opts.SlashCommands,
+		Middleware:    mw,
 	}
 	rt, err := agent.CreateAgentSessionRuntime(ctx, opts.Cwd, so)
 	if err != nil {
 		return nil, err
 	}
 	return &AgentSession{sess: agent.NewAgentSession(rt), rt: rt}, nil
+}
+
+// partitionMiddleware type-checks every element of mw against the three
+// middleware interfaces (RequestMutator, ResponseObserver,
+// ToolInterceptor) and partitions the slice into three typed slices
+// preserving registration order within each type. An element that
+// satisfies none yields ErrUnknownMiddlewareType naming its Go type.
+//
+// An element that satisfies more than one interface is appended to every
+// matching slice — embedders who build such a type explicitly opt in to
+// multi-phase invocation. The common case is single-interface middleware.
+func partitionMiddleware(mw []any) (agent.MiddlewareSet, error) {
+	var set agent.MiddlewareSet
+	for _, v := range mw {
+		if v == nil {
+			continue
+		}
+		matched := false
+		if m, ok := v.(RequestMutator); ok {
+			set.RequestMutators = append(set.RequestMutators, &sdkRequestMutator{m})
+			matched = true
+		}
+		if o, ok := v.(ResponseObserver); ok {
+			set.ResponseObservers = append(set.ResponseObservers, &sdkResponseObserver{o})
+			matched = true
+		}
+		if i, ok := v.(ToolInterceptor); ok {
+			set.ToolInterceptors = append(set.ToolInterceptors, &sdkToolInterceptor{i})
+			matched = true
+		}
+		if !matched {
+			return agent.MiddlewareSet{}, fmt.Errorf("%w: %T", ErrUnknownMiddlewareType, v)
+		}
+	}
+	return set, nil
+}
+
+// sdkRequestMutator adapts a pkg/tau.RequestMutator to the runtime's
+// internal signature. The adapter is a concrete struct (not an interface)
+// so the runtime does not depend on pkg/tau.
+type sdkRequestMutator struct {
+	rm RequestMutator
+}
+
+func (a *sdkRequestMutator) MutateRequest(ctx context.Context, req *llm.Request) error {
+	return a.rm.MutateRequest(ctx, (*Request)(req))
+}
+
+// sdkResponseObserver adapts a pkg/tau.ResponseObserver. It receives the
+// (request, response) pair as *llm.Message — the same type aliased as
+// Response in pkg/tau — so the cast is zero-cost.
+type sdkResponseObserver struct {
+	ro ResponseObserver
+}
+
+func (a *sdkResponseObserver) ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message) error {
+	return a.ro.ObserveResponse(ctx, (*Request)(req), (*Response)(resp))
+}
+
+// sdkToolInterceptor adapts a pkg/tau.ToolInterceptor. The ToolCall /
+// ToolResult aliases make the cast zero-cost.
+type sdkToolInterceptor struct {
+	ti ToolInterceptor
+}
+
+func (a *sdkToolInterceptor) BeforeToolCall(ctx context.Context, call tools.ToolCall) (*tools.ToolResult, error) {
+	r, err := a.ti.BeforeToolCall(ctx, ToolCall(call))
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, nil
+	}
+	out := ToolResult(*r)
+	return &out, nil
+}
+
+func (a *sdkToolInterceptor) AfterToolCall(ctx context.Context, call tools.ToolCall, result tools.ToolResult) error {
+	return a.ti.AfterToolCall(ctx, ToolCall(call), ToolResult(result))
 }
 
 // AgentSession is the SDK handle for one agentic session. A session is

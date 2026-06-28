@@ -93,10 +93,36 @@
 //     (re-exported from internal/tools).
 //   - ErrUnknownCommand         — slash dispatch against an
 //     unregistered command (re-exported from internal/slash).
+//   - ErrUnknownMiddlewareType  — CreateAgentSession rejected an
+//     Options.Middleware element that satisfied none of RequestMutator,
+//     ResponseObserver, or ToolInterceptor.
 //
 // Provider Stream errors arrive as Final.Err on the event bus, not as
 // Run return values: the agent loop converts them into an
 // assistant-side error message and terminates the turn.
+//
+// # Middleware
+//
+// Three extension hooks on the turn loop, registered via Options.Middleware:
+//
+//   - RequestMutator     — mutate the outgoing *Request in place before
+//                          it reaches the provider. Gating: a non-nil
+//                          error aborts the turn.
+//   - ResponseObserver   — observe the (request, response) pair after
+//                          the stream completes. Non-aborting: errors
+//                          are logged via the standard log package.
+//   - ToolInterceptor    — gate each tool call (BeforeToolCall may
+//                          short-circuit with a *ToolResult or abort
+//                          with an error) and observe each result
+//                          (AfterToolCall is non-aborting).
+//
+// Middleware is in-process only; there is no gRPC adapter. The runtime
+// invokes each hook in registration order within its type. An empty
+// (or nil) Options.Middleware slice is the fast path: zero interface
+// dispatches on the turn loop.
+//
+// See docs/input/context/plugin-support/whitepaper.md §3.2 for the
+// design rationale and docs/sdk/cookbook.md for runnable patterns.
 //
 // # Versioning
 //

@@ -132,6 +132,18 @@ type SessionOptions struct {
 	// circular dependency between agent and slash. The SDK layer
 	// type-asserts to *slash.Registry when reading.
 	SlashCommands interface{}
+
+	// Middleware carries the partitioned, type-checked middleware set
+	// the runtime invokes on every LLM round-trip and every tool
+	// execution within a turn. Empty (zero-value MiddlewareSet) is the
+	// no-middleware default: the runtime takes a nil-slice fast path.
+	//
+	// The SDK layer (pkg/tau.sdk.go) type-checks each embedder-supplied
+	// element against the three public middleware interfaces, partitions
+	// the slice, and wraps each element in a runtime-facing adapter. The
+	// runtime trusts the SDK's pre-validation; it never type-checks a
+	// MiddlewareSet element.
+	Middleware MiddlewareSet
 }
 
 // resolvedOptions is the post-defaults bundle the runtime actually
@@ -151,6 +163,7 @@ type resolvedOptions struct {
 	TokenCounter  tokencounter.TokenCounter
 	BuiltinTools  []tools.HeadlessTool
 	PluginManager *plugins.Manager
+	Middleware    MiddlewareSet
 }
 
 // resolve applies defaults from Settings for any optional field that
@@ -171,6 +184,7 @@ func (o SessionOptions) resolve() resolvedOptions {
 		TokenCounter:  o.TokenCounter,
 		BuiltinTools:  o.Tools,
 		PluginManager: o.Plugins,
+		Middleware:    o.Middleware,
 	}
 	if r.ThinkingLevel == "" && o.Settings.DefaultThinkingLevel != nil {
 		r.ThinkingLevel = *o.Settings.DefaultThinkingLevel
@@ -186,6 +200,12 @@ func (o SessionOptions) resolve() resolvedOptions {
 
 // validate returns an error if a required field is missing or a value
 // is out of range. Called by CreateAgentSessionRuntime before wiring.
+//
+// Middleware deliberately has NO validation here. The SDK layer
+// (pkg/tau.sdk.go) has already type-checked every element of
+// Options.Middleware against the three public interfaces by the time
+// the runtime sees the partitioned MiddlewareSet. The runtime trusts
+// that pre-validation and only checks slice lengths on the hot path.
 func (o SessionOptions) validate() error {
 	if o.Model == "" {
 		return errOptionsRequired{"Model"}

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -652,3 +653,391 @@ func TestContractSentinelErrorsAreTyped(t *testing.T) {
 
 // keep strings imported (used in future extensions of this file).
 var _ = strings.Contains
+
+// --- Middleware -----------------------------------------------------------
+//
+// Contract coverage for the request-middleware capability spec. Every
+// requirement / scenario in specs/request-middleware/spec.md has a
+// corresponding assertion here. Swap the fixtures (fauxprovider, the
+// recording middleware adapters) for your real types when copying.
+
+// recordingMutator captures each MutateRequest invocation for assertions.
+type recordingMutator struct {
+	calls atomic.Int32
+	mu    sync.Mutex
+	reqs  []Request
+	err   error // returned on every call when non-nil
+}
+
+func (m *recordingMutator) MutateRequest(ctx context.Context, req *Request) error {
+	m.calls.Add(1)
+	m.mu.Lock()
+	m.reqs = append(m.reqs, *req)
+	err := m.err
+	m.mu.Unlock()
+	return err
+}
+
+func (m *recordingMutator) callCount() int32 { return m.calls.Load() }
+
+// recordingObserver captures each ObserveResponse invocation.
+type recordingObserver struct {
+	calls atomic.Int32
+	mu    sync.Mutex
+	pairs []observedPair
+	err   error
+}
+
+type observedPair struct {
+	Req Request
+	Res Response
+}
+
+func (o *recordingObserver) ObserveResponse(ctx context.Context, req *Request, resp *Response) error {
+	o.calls.Add(1)
+	o.mu.Lock()
+	o.pairs = append(o.pairs, observedPair{Req: *req, Res: *resp})
+	err := o.err
+	o.mu.Unlock()
+	return err
+}
+
+func (o *recordingObserver) callCount() int32 { return o.calls.Load() }
+
+// shortCircuitInterceptor returns a fixed ToolResult from BeforeToolCall
+// and records every AfterToolCall.
+type shortCircuitInterceptor struct {
+	before    *ToolResult // non-nil => short-circuit with this result
+	beforeErr error
+
+	afterMu  sync.Mutex
+	afters   []ToolResult
+	afterErr error
+}
+
+func (i *shortCircuitInterceptor) BeforeToolCall(ctx context.Context, call ToolCall) (*ToolResult, error) {
+	return i.before, i.beforeErr
+}
+
+func (i *shortCircuitInterceptor) AfterToolCall(ctx context.Context, call ToolCall, result ToolResult) error {
+	i.afterMu.Lock()
+	i.afters = append(i.afters, result)
+	i.afterMu.Unlock()
+	return i.afterErr
+}
+
+func (i *shortCircuitInterceptor) afterResults() []ToolResult {
+	i.afterMu.Lock()
+	defer i.afterMu.Unlock()
+	out := make([]ToolResult, len(i.afters))
+	copy(out, i.afters)
+	return out
+}
+
+// countingTool counts its Execute invocations. Satisfies HeadlessTool.
+type countingTool struct {
+	name  string
+	calls atomic.Int32
+}
+
+func (t *countingTool) Name() string                  { return t.name }
+func (t *countingTool) Description() string           { return "counts Execute calls" }
+func (t *countingTool) Parameters() jsonschema.Schema { return jsonschema.Schema{} }
+func (t *countingTool) Execute(ctx context.Context, call ToolCall) (ToolResult, error) {
+	t.calls.Add(1)
+	return NewTextResult(t.name + ":executed"), nil
+}
+
+func (t *countingTool) callCount() int32 { return t.calls.Load() }
+
+// resultText extracts the text of the first TextContent block from a
+// ToolResult. Returns "" when the result has no text block. Contract
+// tests use this to assert short-circuit results without reaching into
+// internal/types.
+func resultText(r ToolResult) string {
+	for _, b := range r.Content {
+		if tc, ok := b.(TextContent); ok {
+			return tc.Text
+		}
+	}
+	return ""
+}
+
+// toolCallScript returns an LLMClient that emits one tool-call delta
+// (the named tool) followed by a Final with StopReasonToolUse on the
+// FIRST call, then a plain text delta + Final with StopReasonEndTurn on
+// every subsequent call. This drives tool-interceptor contract tests
+// through the public SDK: the agent loop dispatches the named tool once,
+// re-dispatches, gets the closing EndTurn, and the turn completes
+// without an infinite loop.
+type toolCallScript struct {
+	toolName string
+	calls    atomic.Int32
+}
+
+func (s *toolCallScript) Stream(ctx context.Context, req Request) (<-chan Delta, error) {
+	n := s.calls.Add(1)
+	ch := make(chan Delta, 2)
+	go func() {
+		defer close(ch)
+		if n == 1 {
+			ch <- ToolCallDelta{ContentIndex: 0, ID: "tu_contract", Name: s.toolName, PartialInput: "{}"}
+			ch <- Final{StopReason: StopReasonToolUse}
+			return
+		}
+		ch <- TextDelta{ContentIndex: 0, Text: "done"}
+		ch <- Final{StopReason: StopReasonEndTurn}
+	}()
+	return ch, nil
+}
+
+// TestContractMiddlewareRequestMutatorInvoked: register a recording
+// RequestMutator that mutates req.Tools, run a turn with a faux provider,
+// and assert the provider observed the mutated request.
+func TestContractMiddlewareRequestMutatorInvoked(t *testing.T) {
+	recordingClient := fauxprovider.NewWithResponse("ok")
+	mutator := &recordingMutator{}
+	opts := contractOpts(t)
+	opts.LLMClient = recordingClient
+	opts.Middleware = []any{mutator}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession with mutator: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	// Mutator clears Tools on every call so we can observe the mutation
+	// reaching the provider.
+	mutator.err = nil
+	goMutator := &reqToolsClearingMutator{inner: mutator}
+	opts2 := contractOpts(t)
+	opts2.LLMClient = recordingClient
+	opts2.Middleware = []any{goMutator}
+	sess2, err := CreateAgentSession(context.Background(), opts2)
+	if err != nil {
+		t.Fatalf("CreateAgentSession with clearing mutator: %v", err)
+	}
+	t.Cleanup(func() { sess2.Shutdown(context.Background()) })
+
+	if err := sess2.Run(context.Background(), "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := goMutator.calls.Load(); got != 1 {
+		t.Errorf("mutator invoked %d times, want 1", got)
+	}
+	reqs := recordingClient.RecordedRequests()
+	if len(reqs) == 0 {
+		t.Fatal("no requests recorded by the provider")
+	}
+	if len(reqs[len(reqs)-1].Tools) != 0 {
+		t.Errorf("mutator did not clear Tools; provider saw %d entries", len(reqs[len(reqs)-1].Tools))
+	}
+}
+
+// reqToolsClearingMutator wraps recordingMutator and clears req.Tools.
+type reqToolsClearingMutator struct {
+	inner *recordingMutator
+	calls atomic.Int32
+}
+
+func (m *reqToolsClearingMutator) MutateRequest(ctx context.Context, req *Request) error {
+	m.calls.Add(1)
+	req.Tools = nil
+	return m.inner.MutateRequest(ctx, req)
+}
+
+// TestContractMiddlewareResponseObserverInvoked: register a recording
+// ResponseObserver, run a turn, assert it was called once with the
+// request and the response.
+func TestContractMiddlewareResponseObserverInvoked(t *testing.T) {
+	observer := &recordingObserver{}
+	opts := contractOpts(t)
+	opts.Middleware = []any{observer}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession with observer: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	if err := sess.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := observer.callCount(); got != 1 {
+		t.Errorf("observer invoked %d times, want 1", got)
+	}
+}
+
+// TestContractMiddlewareToolInterceptorShortCircuit: register a
+// ToolInterceptor returning NewTextResult("intercepted") from
+// BeforeToolCall; register a countingTool; run a turn that triggers
+// the tool; assert the tool's Execute was NOT called and the turn
+// result reflects "intercepted".
+func TestContractMiddlewareToolInterceptorShortCircuit(t *testing.T) {
+	intercepted := NewTextResult("intercepted")
+	interceptor := &shortCircuitInterceptor{before: &intercepted}
+	tool := &countingTool{name: "counter"}
+
+	opts := contractOpts(t)
+	opts.LLMClient = &toolCallScript{toolName: "counter"}
+	opts.Tools = []HeadlessTool{tool}
+	opts.Middleware = []any{interceptor}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession with interceptor: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	if err := sess.Run(context.Background(), "call counter"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := tool.callCount(); got != 0 {
+		t.Errorf("underlying tool Execute called %d times, want 0 (short-circuit)", got)
+	}
+	afters := interceptor.afterResults()
+	if len(afters) != 1 {
+		t.Errorf("AfterToolCall invoked %d times, want 1", len(afters))
+	}
+	if len(afters) == 1 {
+		got := resultText(afters[0])
+		if got != "intercepted" {
+			t.Errorf("AfterToolCall result text = %q, want %q", got, "intercepted")
+		}
+	}
+}
+
+// TestContractMiddlewareOrderingPreserved: register two RequestMutators
+// (A then B) where B asserts it ran after A by checking shared state.
+func TestContractMiddlewareOrderingPreserved(t *testing.T) {
+	shared := &orderingState{}
+	mutA := &orderingMutator{name: "A", shared: shared}
+	mutB := &orderingMutator{name: "B", shared: shared, requireSawA: true}
+
+	opts := contractOpts(t)
+	opts.Middleware = []any{mutA, mutB}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession with two mutators: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	if err := sess.Run(context.Background(), "ordering"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if mutB.calls.Load() != 1 || mutA.calls.Load() != 1 {
+		t.Errorf("mutator invocations A=%d B=%d, want 1 and 1", mutA.calls.Load(), mutB.calls.Load())
+	}
+}
+
+type orderingState struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (s *orderingState) record(name string) {
+	s.mu.Lock()
+	s.seen = append(s.seen, name)
+	s.mu.Unlock()
+}
+
+func (s *orderingState) has(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, n := range s.seen {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+type orderingMutator struct {
+	name        string
+	calls       atomic.Int32
+	shared      *orderingState
+	requireSawA bool
+}
+
+func (m *orderingMutator) MutateRequest(ctx context.Context, req *Request) error {
+	m.calls.Add(1)
+	if m.requireSawA && !m.shared.has("A") {
+		return errors.New("orderingMutator B: did not see A first")
+	}
+	m.shared.record(m.name)
+	return nil
+}
+
+// TestContractMiddlewareUnknownTypeRejected: pass Options.Middleware{42}
+// to CreateAgentSession; assert the error satisfies
+// errors.Is(err, ErrUnknownMiddlewareType); assert no session is
+// allocated.
+func TestContractMiddlewareUnknownTypeRejected(t *testing.T) {
+	opts := contractOpts(t)
+	opts.Middleware = []any{42}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err == nil {
+		t.Cleanup(func() { sess.Shutdown(context.Background()) })
+		t.Fatal("CreateAgentSession with int middleware: got nil error, want one")
+	}
+	if !errors.Is(err, ErrUnknownMiddlewareType) {
+		t.Errorf("err = %v, want errors.Is(err, ErrUnknownMiddlewareType)", err)
+	}
+	if sess != nil {
+		t.Error("session allocated despite rejection")
+	}
+}
+
+// TestContractMiddlewareErrorPropagation: a RequestMutator returning a
+// sentinel error aborts Run; a ResponseObserver returning a sentinel
+// error does NOT abort Run (it is logged instead).
+func TestContractMiddlewareErrorPropagation(t *testing.T) {
+	t.Run("mutator error aborts", func(t *testing.T) {
+		sentinel := errors.New("mutator-abort")
+		mutator := &recordingMutator{err: sentinel}
+		opts := contractOpts(t)
+		opts.Middleware = []any{mutator}
+		sess, err := CreateAgentSession(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("CreateAgentSession: %v", err)
+		}
+		t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+		runErr := sess.Run(context.Background(), "go")
+		if !errors.Is(runErr, sentinel) {
+			t.Errorf("Run err = %v, want errors.Is(err, sentinel)", runErr)
+		}
+	})
+
+	t.Run("observer error does not abort", func(t *testing.T) {
+		sentinel := errors.New("observer-log")
+		observer := &recordingObserver{err: sentinel}
+		opts := contractOpts(t)
+		opts.Middleware = []any{observer}
+		sess, err := CreateAgentSession(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("CreateAgentSession: %v", err)
+		}
+		t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+		runErr := sess.Run(context.Background(), "go")
+		if runErr != nil {
+			t.Errorf("Run err = %v, want nil (observer error is logged, not propagated)", runErr)
+		}
+		if observer.callCount() != 1 {
+			t.Errorf("observer invoked %d times, want 1 (error did not block remaining observers)", observer.callCount())
+		}
+	})
+}
+
+// TestContractMiddlewareSentinelIdentity: ErrUnknownMiddlewareType
+// satisfies the standard errors.Is identity contract.
+func TestContractMiddlewareSentinelIdentity(t *testing.T) {
+	if !errors.Is(ErrUnknownMiddlewareType, ErrUnknownMiddlewareType) {
+		t.Error("errors.Is(sentinel, sentinel) = false, want true")
+	}
+	if ErrUnknownMiddlewareType == nil {
+		t.Error("ErrUnknownMiddlewareType is nil")
+	}
+}
