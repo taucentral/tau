@@ -6,6 +6,39 @@ This file tracks user-visible changes to the public SDK at
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/);
 versions track the Go module version in `go.mod`.
 
+## Unreleased
+
+### Added
+
+- **Middleware seam** — three in-process extension hooks on the agent
+  turn loop, registered via `Options.Middleware []any`:
+  - `RequestMutator` mutates the outgoing `*Request` in place before
+    the provider call. Gating: a non-nil error aborts the turn.
+  - `ResponseObserver` inspects the completed `(*Request, *Response)`
+    pair after the stream returns. Non-aborting: errors are logged via
+    the standard `log` package and remaining observers still run.
+  - `ToolInterceptor` wraps each tool execution. `BeforeToolCall` may
+    short-circuit with a `*ToolResult` (skips `Execute`) or abort with
+    an error. `AfterToolCall` observes the result non-aborting.
+  - `Response` type alias for `llm.Message` — the accumulated assistant
+    message returned by a single round-trip, used as the observer's
+    response argument.
+  - `ErrUnknownMiddlewareType` sentinel returned by `CreateAgentSession`
+    when an `Options.Middleware` element satisfies none of the three
+    interfaces; `errors.Is` identity is contract-tested.
+- Middleware is in-process only; no gRPC adapter. The runtime takes a
+  nil-slice fast path when no middleware is registered (zero interface
+  dispatches on the turn loop). The runtime partitions the slice into
+  three typed slices preserving registration order within each type;
+  an element that satisfies multiple interfaces is invoked at every
+  matching intercept point.
+- Asymmetric error propagation is contract-tested: gating hooks
+  (`RequestMutator`, `ToolInterceptor.BeforeToolCall`) abort the turn;
+  observing hooks (`ResponseObserver`, `ToolInterceptor.AfterToolCall`)
+  log via `log.Printf` and never abort.
+- Contract coverage in `pkg/tau/contract_test.go` plus runtime coverage
+  in `internal/agent/middleware_test.go`.
+
 ## v1.0.0
 
 Initial public release of the tau Go SDK. The package was promoted

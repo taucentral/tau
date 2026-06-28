@@ -180,6 +180,18 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 			return fmt.Errorf("agent: build request: %w", err)
 		}
 
+		// Middleware: RequestMutator. Runs in registration order before
+		// the request reaches the provider. A nil slice is the fast path
+		// — no interface dispatch, no allocation. A non-nil error aborts
+		// the turn immediately (gating hook).
+		if mw := s.rt.Options.Middleware.RequestMutators; len(mw) > 0 {
+			for _, m := range mw {
+				if err := m.MutateRequest(turnCtx, &req); err != nil {
+					return fmt.Errorf("agent: request mutator: %w", err)
+				}
+			}
+		}
+
 		// Emit MessageStart before consuming any deltas.
 		s.rt.EventBus.Publish(MessageStartEvent{When: time.Now()})
 
@@ -189,6 +201,11 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 			// Even on failure, emit MessageEnd so subscribers know the
 			// message slot is closed.
 			s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
+			// Middleware: ResponseObserver. Even on Stream error, observers
+			// run once with the (request, empty-response) pair so audit /
+			// telemetry middleware see the failure. Errors are logged but
+			// do NOT abort the turn.
+			observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
 			if llm.IsAbort(err) {
 				return s.abortTurn(err)
 			}
@@ -212,6 +229,12 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 			stopReason = llm.StopReasonError
 		}
 
+		// Middleware: ResponseObserver. Runs in registration order after
+		// the stream completes. The observer sees the (request, response)
+		// pair — the response is the accumulated assistant Message. Errors
+		// are logged but do NOT abort the turn (observing hook).
+		observeResponse(turnCtx, s.rt.Options.Middleware, &req, &assistant)
+
 		// Step 4: execute any tool calls. Per spec, tool_call/tool_result
 		// events fire BEFORE message_end.
 		var toolResults []llm.ToolResult
@@ -221,6 +244,15 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 				if llm.IsAbort(toolErr) {
 					s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonAborted})
 					return s.abortTurn(toolErr)
+				}
+				// ToolInterceptor.BeforeToolCall abort: surface to caller
+				// per spec. Unlike a tool-execution error (which is
+				// captured in the ToolResult as an IsError result and the
+				// turn continues), an interceptor abort is a turn-level
+				// signal the embedder raised explicitly.
+				if errors.Is(toolErr, errInterceptorAbort) {
+					s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
+					return fmt.Errorf("agent: tool interceptor: %w", toolErr)
 				}
 				// Non-abort tool error: surface but keep going. The
 				// error is captured in the relevant ToolResult already.
@@ -345,6 +377,12 @@ func (s *AgentSession) buildRequest(ctx context.Context) (llm.Request, error) {
 // the slice of ToolResults (one per call). Concurrency is governed by
 // Settings.SteeringMode: SteeringAll runs concurrently, anything else
 // runs serially in the order the model emitted them.
+//
+// An error return indicates a ToolInterceptor.BeforeToolCall aborted the
+// turn. The caller surfaces the error to Run's caller; partial results
+// are still included in the returned slice so the event-bus trace stays
+// consistent (ToolCall events fire before the abort; the aborting
+// interceptor did NOT emit a ToolResult).
 func (s *AgentSession) executeTools(ctx context.Context, assistant llm.Message) ([]llm.ToolResult, error) {
 	calls := collectToolCalls(assistant)
 	if len(calls) == 0 {
@@ -359,7 +397,9 @@ func (s *AgentSession) executeTools(ctx context.Context, assistant llm.Message) 
 			wg.Add(1)
 			go func(i int, c llm.ToolUse) {
 				defer wg.Done()
-				results[i] = s.runOneTool(ctx, c)
+				res, err := s.runOneTool(ctx, c)
+				results[i] = res
+				errs[i] = err
 			}(i, c)
 		}
 		wg.Wait()
@@ -371,18 +411,35 @@ func (s *AgentSession) executeTools(ctx context.Context, assistant llm.Message) 
 		}
 	} else {
 		for i, c := range calls {
-			results[i] = s.runOneTool(ctx, c)
+			res, err := s.runOneTool(ctx, c)
+			results[i] = res
+			if err != nil {
+				return results, err
+			}
 		}
 	}
 	return results, nil
 }
 
-// runOneTool emits ToolCall, executes the tool, emits ToolResult, and
-// returns the llm.ToolResult to be aggregated into the next request.
+// runOneTool emits ToolCall, executes the tool (subject to middleware),
+// emits ToolResult, and returns the llm.ToolResult to be aggregated into
+// the next request.
+//
 // Tool errors (file-not-found, non-zero exit) become IsError=true
-// results; only infrastructure errors (panic, ctx cancellation) return
-// a non-nil error.
-func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) llm.ToolResult {
+// results; only infrastructure errors (panic, ctx cancellation) and
+// ToolInterceptor.BeforeToolCall aborts return a non-nil error.
+//
+// Middleware wiring (when the runtime was constructed with middleware):
+//
+//   - Before the registry Lookup, ToolInterceptor.BeforeToolCall runs in
+//     registration order. A short-circuit result (non-nil *ToolResult)
+//     skips the underlying tool's Execute but still emits ToolCall and
+//     ToolResult events so subscribers see consistent events. A non-nil
+//     error short-circuits AND is returned to abort the turn.
+//   - After Execute (or a short-circuit result), ToolInterceptor.AfterToolCall
+//     runs in registration order. AfterToolCall errors are logged via the
+//     standard log package and do NOT abort the turn.
+func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) (llm.ToolResult, error) {
 	call := tools.ToolCall{
 		ID:   use.ID,
 		Name: use.Name,
@@ -390,6 +447,29 @@ func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) llm.Tool
 		Cwd:  s.rt.Cwd,
 	}
 	s.rt.EventBus.Publish(ToolCallEvent{When: time.Now(), Call: call})
+
+	// Middleware: ToolInterceptor.BeforeToolCall. Runs before Lookup so
+	// the interceptor can deny calls to tools that aren't even registered
+	// (e.g., a permission gate that whitelists by name). A short-circuit
+	// result skips Execute AND Lookup; AfterToolCall still runs.
+	mw := s.rt.Options.Middleware
+	if len(mw.ToolInterceptors) > 0 {
+		short, err := interceptBefore(ctx, mw, call)
+		if err != nil {
+			return llm.ToolResult{}, err
+		}
+		if short != nil {
+			result := *short
+			afterLLM := result.AsLLMResult(use.ID)
+			s.rt.EventBus.Publish(ToolResultEvent{
+				When:   time.Now(),
+				Result: result,
+				ToolID: use.ID,
+			})
+			interceptAfter(ctx, mw, call, result)
+			return afterLLM, nil
+		}
+	}
 
 	tool, err := s.rt.Registry.Lookup(use.Name)
 	var result tools.ToolResult
@@ -413,13 +493,20 @@ func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) llm.Tool
 		}
 	}
 
+	// Middleware: ToolInterceptor.AfterToolCall. Runs after Execute (or
+	// after an unknown-tool synthesized result). Errors are logged but
+	// do NOT abort the turn.
+	if len(mw.ToolInterceptors) > 0 {
+		interceptAfter(ctx, mw, call, result)
+	}
+
 	llmResult := result.AsLLMResult(use.ID)
 	s.rt.EventBus.Publish(ToolResultEvent{
 		When:   time.Now(),
 		Result: result,
 		ToolID: use.ID,
 	})
-	return llmResult
+	return llmResult, nil
 }
 
 // Abort cancels the in-flight turn's context. Subscribers (tools,
