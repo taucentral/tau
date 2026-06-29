@@ -218,9 +218,10 @@ func TestLazyManager_BufferedTreeWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
-	// a and b are siblings via buffer: a is parent of b.
-	if len(path) != 2 {
-		t.Errorf("path len = %d, want 2 (a, b)", len(path))
+	// Path is [synthetic-root, a, b] — the materialized SessionHeader
+	// root plus the two appended entries.
+	if len(path) != 3 {
+		t.Errorf("path len = %d, want 3 (root, a, b)", len(path))
 	}
 }
 
@@ -232,7 +233,7 @@ func TestLazyManager_SetLeaf_UnknownIDReturnsErrInvalidBranch(t *testing.T) {
 	}
 }
 
-func TestLazyManager_Tree_RejectsEmptyBuffer(t *testing.T) {
+func TestLazyManager_Tree_HasSyntheticRootBeforeFlush(t *testing.T) {
 	withConfigDir(t)
 	cwd := t.TempDir()
 	m, err := Create(cwd, SessionHeaderPayload{Cwd: cwd})
@@ -240,9 +241,26 @@ func TestLazyManager_Tree_RejectsEmptyBuffer(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	defer m.Close()
-	_, err = m.Tree()
-	if err == nil {
-		t.Error("expected error on Tree() with empty buffer, got nil")
+	// Create materializes a synthetic SessionHeader root in the buffer
+	// so Tree(), LeafID(), and AppendAt() work before flush. The tree
+	// should contain exactly one entry (the root).
+	tree, err := m.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	leaf := m.LeafID()
+	if leaf == "" {
+		t.Fatal("LeafID is empty; expected the synthetic root ID")
+	}
+	path, err := tree.Path(leaf)
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	if len(path) != 1 {
+		t.Errorf("path len = %d, want 1 (synthetic root only)", len(path))
+	}
+	if path[0].Kind != KindSessionHeader {
+		t.Errorf("root kind = %v, want KindSessionHeader", path[0].Kind)
 	}
 }
 

@@ -92,6 +92,51 @@ func (m *inMemoryManager) Append(entry Entry) (string, error) {
 	return id, nil
 }
 
+// AppendAt writes entry as a child of parentID without advancing the
+// leaf pointer. Used by branchManager and MergeState to integrate entries
+// into a shared tree without disturbing the active leaf.
+//
+// Returns ErrInvalidBranch when parentID is not in the entries slice.
+func (m *inMemoryManager) AppendAt(entry Entry, parentID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return "", ErrManagerClosed
+	}
+	// Validate parentID in entries.
+	found := false
+	for _, e := range m.entries {
+		if e.ID == parentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("%w: parent %q not in tree", ErrInvalidBranch, parentID)
+	}
+	id, err := NewID(func(candidate string) bool {
+		for _, e := range m.entries {
+			if e.ID == candidate {
+				return true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return "", err
+	}
+	e := Entry{
+		ID:        id,
+		ParentID:  parentID,
+		Kind:      kindOf(entry.Payload),
+		Timestamp: time.Now().UTC(),
+		Payload:   entry.Payload,
+	}
+	m.entries = append(m.entries, e)
+	// Intentionally do NOT advance m.leafID — that's the AppendAt contract.
+	return id, nil
+}
+
 // Branch moves the leaf pointer to fromID.
 func (m *inMemoryManager) Branch(fromID string) error {
 	return m.SetLeaf(fromID)

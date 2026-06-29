@@ -71,6 +71,107 @@ versions track the Go module version in `go.mod`.
 - Contract coverage in `pkg/tau/contract_test.go` plus runtime coverage
   in `internal/agent/middleware_test.go`.
 
+- **Multi-session orchestration seam** — `Orchestrator` interface,
+  `OrchestrationSpec`, `PhaseSpec`, `MergeSpec`, `MergePolicy`
+  constants, `ConflictReport` type, and four typed sentinels for
+  driving child sessions in the agent's own process.
+  - `Orchestrator.Run(ctx, OrchestrationSpec) (<-chan SessionEvent, error)`
+    drives phases in dependency order; the returned channel is closed
+    when all phases complete (nil error) or when ctx is cancelled
+    (`ErrOrchestrationAborted` wrapping ctx.Err()).
+  - `SequentialOrchestrator` is the reference implementation. Construct
+    via `NewSequentialOrchestrator(parent)`. Phases run strictly in
+    dependency order; cycles are rejected at Run time before any phase
+    starts.
+  - `Options.Orchestrator` is the Spawn-time gate. The runtime only
+    checks nil vs non-nil; the actual orchestrator used by Run is
+    wired separately via `NewSequentialOrchestrator`.
+  - `Spawn(ctx, Options) (*AgentSession, error)` creates a child
+    session. The runtime NEVER calls Shutdown on children; the
+    embedder owns each child's lifecycle.
+  - `MergeState(ctx, child, MergeSpec) error` reconciles a child's
+    state tree into the parent. Three policies: `MergePolicyNone`
+    discards the child's branch; `MergePolicyAppend` accepts the
+    branch verbatim; `MergePolicyReplay` replays the child's tool
+    calls against the parent and reports the first file-granular
+    conflict.
+  - `ConflictReport` carries `Phase`, `File`, `LineRange`. Recovered
+    from a `MergeState` error via `errors.As(err, &report)` where
+    `report` is a `*ConflictReport`.
+  - Sentinels: `ErrOrchestrationConflict`, `ErrOrchestrationAborted`,
+    `ErrOrchestratorClosed`, `ErrNoOrchestrator`. Each is a var
+    re-export of the canonical internal/agent sentinel so
+    `errors.Is` identity holds across the SDK ↔ runtime boundary.
+  - Contract coverage in `pkg/tau/contract_test.go`
+    (`TestContractOrchestration*`) plus runtime coverage in
+    `internal/orchestrator/sequential_test.go`.
+
+### Changed
+
+- **Orchestrator interface widened to 2 methods.** `Orchestrator` now
+  declares `Run` and `Err`. `Err` returns the first non-nil, non-
+  ctx-cancel phase error after the channel closes; it returns nil on
+  a fresh orchestrator. `Run` still returns a synchronous error for
+  upfront validation (e.g. dependency cycle). Existing embedder
+  implementations must add an `Err() error` method to satisfy the
+  widened interface.
+- **SequentialOrchestrator runs independent phases concurrently.**
+  Phases are grouped into dependency levels via Kahn's algorithm;
+  levels execute strictly in order; phases WITHIN a level run
+  concurrently, with events multiplexed onto the single output
+  channel in arrival order. `DependsOn` is still honored across
+  levels.
+- **`OrchestrationSpec.ParentEventBus` is now wired.** When true, the
+  orchestrator forwards every child event to the parent's event bus
+  in addition to the `Run` channel. Default false preserves existing
+  behavior (the channel is the sole sink).
+- **Child state is a shared-store branch.** `Spawn` wraps the parent's
+  state Manager in a `state.branchManager` (shared read-side store +
+  private shadow buffer). The parent's leaf is unchanged by child
+  writes. `MergeState` integrates the shadow via the parent's
+  `AppendAt`. `MergePolicyNone` discards the shadow with zero orphan
+  entries.
+- **`adaptPhaseOptions` inherits per-field.** When a phase's options
+  omit `Tools`, `Settings`, or `Middleware`, the child inherits the
+  parent's value for that field. Previous behavior dropped
+  `Settings`/`Middleware` when the phase supplied partial options.
+
+### Fixed
+
+- **Line-level conflict detection.** `MergePolicyReplay` now populates
+  `ConflictReport.LineRange`: `edit` reports the line span of
+  `old_string` in the parent's current on-disk file; `write` reports
+  `[1, newline_count(content)+1]`; other writes report `[0,0]`. The
+  previous behavior always returned `[0,0]`.
+- **Phase attribution in conflict reports.** The orchestrator now
+  passes the running phase's `Name` through `MergeSpec.Phase`, and
+  `MergeState` copies it into `ConflictReport.Phase`. The previous
+  behavior always left `Phase` empty.
+- **Read tool no longer false-positives as a conflict.** Replay
+  conflict detection now uses `compaction.ExtractFileTracking` with
+  `DefaultFileReadTools=["read"]` and
+  `DefaultFileWriteTools=["edit","write","patch"]`. Only file-mutating
+  tools contribute to the parent's write-set and the child's replayed
+  ops.
+- **`ErrOrchestratorClosed` returned on closed child state.**
+  `MergeState` detects closed child state via `state.IsClosed` and
+  returns `ErrOrchestratorClosed`. The previous behavior returned an
+  opaque internal error.
+- **`child.Abort()` on cancellation.** On `ctx.Done()` during `Run`,
+  the orchestrator calls `child.Abort()` on every in-flight child,
+  waits for the child `Run` goroutines to return, closes the channel,
+  and returns `ErrOrchestrationAborted` wrapping `ctx.Err()`. The
+  previous behavior relied solely on ctx propagation through `Run`.
+- **Phase `Run` errors surfaced.** When a phase's `Run` returns a
+  non-nil, non-ctx-cancel error, the orchestrator stores it via
+  `setErr`, aborts subsequent levels, and closes the channel. The
+  error is recoverable via `Orchestrator.Err()`. The previous behavior
+  discarded phase errors (`_ = runErr`).
+- **Dead internal sentinel removed.** The internal
+  `errOrchestratorClosed` sentinel (declared but never returned in
+  `internal/orchestrator/sequential.go`) is deleted. The SDK-level
+  `ErrOrchestratorClosed` remains.
+
 ## v1.0.0
 
 Initial public release of the tau Go SDK. The package was promoted

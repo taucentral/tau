@@ -182,6 +182,119 @@
 //
 // Reference: docs/input/context/plugin-support/whitepaper.md §3.4.
 //
+// # Orchestration
+//
+// The SDK ships a multi-session orchestration seam. An Orchestrator
+// drives one or more child sessions in the agent's own process and
+// multiplexes their events onto a single channel returned by Run.
+// Three reference patterns are anticipated (whitepaper §3.3):
+//
+//   - Sequential phase — one child per phase, output of phase N
+//     becomes input of phase N+1 (the OpenSpec workflow).
+//   - Parallel fan-out — parent decomposes work, spawns N children
+//     for independent subtasks, fans in results.
+//   - Adversarial review — primary produces, secondary critiques,
+//     primary revises.
+//
+// This change ships the seam itself plus SequentialOrchestrator as
+// the reference implementation. SequentialOrchestrator executes
+// phases in dependency order: phases are grouped into dependency
+// levels (Kahn's algorithm), levels run strictly in order, and
+// independent phases WITHIN a level run concurrently with their
+// events multiplexed onto the single output channel in arrival
+// order. Adversarial review is a follow-on change.
+//
+// Construction:
+//
+//	parent, _ := tau.CreateAgentSession(ctx, tau.Options{
+//	    Orchestrator: ...,   // non-nil placeholder; gate for Spawn
+//	    ...,
+//	})
+//	orch := tau.NewSequentialOrchestrator(parent)
+//	ch, _ := orch.Run(ctx, tau.OrchestrationSpec{
+//	    Phases: []tau.PhaseSpec{
+//	        {Name: "a", Prompt: "..."},
+//	        {Name: "b", Prompt: "...", DependsOn: []string{"a"}},
+//	    },
+//	    MergePolicy: tau.MergePolicyAppend,
+//	})
+//	for evt := range ch { ... }
+//	if err := orch.Err(); err != nil { /* first phase error */ }
+//
+// Spawn and MergeState are also exposed directly on *AgentSession so
+// embedders can compose their own orchestration patterns without
+// implementing the Orchestrator interface:
+//
+//	child, _ := parent.Spawn(ctx, tau.Options{...})
+//	_ = child.Run(ctx, "subtask prompt")
+//	_ = parent.MergeState(ctx, child, tau.MergeSpec{Policy: tau.MergePolicyAppend})
+//
+// Shared-store branch model: Spawn wraps the parent's state Manager
+// in a branch Manager that shares the parent's read-side store and
+// maintains a private shadow buffer for the child's writes. The
+// parent's leaf is unchanged by child writes. MergeState integrates
+// the shadow into the parent per the merge policy:
+//
+//   - MergePolicyNone discards the shadow. No parent mutation, no
+//     orphan entries.
+//   - MergePolicyAppend attaches each shadow entry to the parent's
+//     leaf via AppendAt, then advances the parent's leaf. Conflict
+//     detection does NOT run.
+//   - MergePolicyReplay walks the shadow's write-tool-calls against
+//     the parent's current write-set; on conflict returns
+//     ErrOrchestrationConflict wrapping a *ConflictReport (see
+//     below); on clean, integrates as Append does.
+//
+// Conflict-reporting contract: the report names the phase (from
+// MergeSpec.Phase), the conflicting file, and a 1-indexed inclusive
+// line range computed from the tool call's input. For edit, the
+// range is the line span of old_string in the parent's current
+// on-disk file. For write, the range covers the whole content.
+//
+//	var report *tau.ConflictReport
+//	if errors.As(err, &report) {
+//	    log.Printf("phase %s conflict on %s lines %d-%d",
+//	        report.Phase, report.File,
+//	        report.LineRange[0], report.LineRange[1])
+//	}
+//
+// Only file-mutating tools (edit, write, patch) contribute to the
+// parent's write-set and the child's replayed ops. The read tool
+// never triggers a conflict.
+//
+// ParentEventBus: OrchestrationSpec.ParentEventBus (default false)
+// controls whether child events are forwarded to the parent's event
+// bus in addition to the Run channel. Set it true when a TUI or
+// observability middleware already subscribes to the parent bus.
+//
+// Error surfacing: Run returns a synchronous error only for upfront
+// validation (e.g. dependency cycle). Post-start phase failures are
+// surfaced via Orchestrator.Err, which returns the first non-nil,
+// non-ctx-cancel phase error after the channel closes.
+//
+// Cancellation: on ctx cancellation during Run, the orchestrator
+// calls child.Abort() on every in-flight child, waits for child Run
+// goroutines to return, closes the channel, and returns
+// ErrOrchestrationAborted wrapping ctx.Err().
+//
+// Lifecycle contract:
+//
+//   - The runtime NEVER calls Shutdown on child sessions spawned via
+//     AgentSession.Spawn. The parent (or the embedder) owns each
+//     child's lifecycle.
+//   - The runtime NEVER calls any lifecycle method on an orchestrator
+//     supplied via Options.Orchestrator. The embedder owns the
+//     orchestrator's lifecycle.
+//   - The orchestrator supplied via Options.Orchestrator is a
+//     Spawn-time gate (nil means "orchestration not configured";
+//     Spawn returns ErrNoOrchestrator). The actual orchestrator used
+//     by Run is wired separately via NewSequentialOrchestrator or
+//     equivalent.
+//   - On closed/deallocated child state, MergeState returns
+//     ErrOrchestratorClosed.
+//
+// Reference: docs/input/context/plugin-support/whitepaper.md §3.3.
+//
 // # Versioning
 //
 // The SDK follows the Go module version drawn from go.mod. The v1.0

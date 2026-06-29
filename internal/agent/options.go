@@ -159,6 +159,25 @@ type SessionOptions struct {
 	//     runtime closes on Shutdown), Store has no default — nil means
 	//     "no store" — so there is nothing for the runtime to close.
 	Store storage.Store
+
+	// Orchestrator, when non-nil, enables multi-session orchestration
+	// features on this session. The presence of a non-nil orchestrator
+	// is what *AgentSession.Spawn checks to decide whether to allow
+	// child spawning. nil means "single-session behaviour" and Spawn
+	// returns ErrRuntimeShutdown.
+	//
+	// The field is typed as any because internal/agent cannot import
+	// pkg/tau without creating an import cycle. The SDK layer passes
+	// a value satisfying pkg/tau.Orchestrator (a single-method
+	// interface); the runtime never type-asserts it — it only checks
+	// nil vs non-nil to gate Spawn.
+	//
+	// Lifecycle contract:
+	//   - The runtime does NOT call any method on the orchestrator
+	//     during Shutdown. The embedder owns the orchestrator's
+	//     lifecycle. Children spawned via Spawn are likewise NOT
+	//     shut down automatically by the parent's Shutdown.
+	Orchestrator any
 }
 
 // resolvedOptions is the post-defaults bundle the runtime actually
@@ -180,6 +199,7 @@ type resolvedOptions struct {
 	PluginManager *plugins.Manager
 	Middleware    MiddlewareSet
 	Store         storage.Store
+	Orchestrator  any
 }
 
 // resolve applies defaults from Settings for any optional field that
@@ -202,6 +222,7 @@ func (o SessionOptions) resolve() resolvedOptions {
 		PluginManager: o.Plugins,
 		Middleware:    o.Middleware,
 		Store:         o.Store,
+		Orchestrator:  o.Orchestrator,
 	}
 	if r.ThinkingLevel == "" && o.Settings.DefaultThinkingLevel != nil {
 		r.ThinkingLevel = *o.Settings.DefaultThinkingLevel

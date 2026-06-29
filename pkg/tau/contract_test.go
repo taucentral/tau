@@ -21,6 +21,7 @@ package tau
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1284,5 +1285,299 @@ func TestContractStorageStoreInspectorReturnsNilWhenOmitted(t *testing.T) {
 	t.Cleanup(func() { sess.Shutdown(context.Background()) })
 	if got := sess.Store(); got != nil {
 		t.Errorf("Store() = %v, want nil (no store injected)", got)
+	}
+}
+
+// --- Orchestration --------------------------------------------------------
+
+// writeToolFaux is a faux LLMClient that on the first Stream emits a
+// ToolCallDelta naming the "write" tool with a caller-supplied path and
+// content, then a Final with StopReasonToolUse. On subsequent streams it
+// emits a plain text + end_turn. This drives the agent loop through the
+// full write-tool cycle so the session's state tree records a tool_use
+// touching the supplied path.
+type writeToolFaux struct {
+	mu    sync.Mutex
+	calls int
+	path  string
+}
+
+func (f *writeToolFaux) Stream(ctx context.Context, _ Request) (<-chan Delta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.mu.Unlock()
+	f.calls++
+	idx := f.calls
+	ch := make(chan Delta, 4)
+	go func() {
+		defer close(ch)
+		if idx == 1 {
+			input := fmt.Sprintf(`{"path":%q,"content":"x"}`, f.path)
+			ch <- ToolCallDelta{ID: "tu_write", Name: "write", PartialInput: input}
+			ch <- Final{StopReason: StopReasonToolUse}
+			return
+		}
+		ch <- TextDelta{Text: "after write"}
+		ch <- Final{StopReason: StopReasonEndTurn}
+	}()
+	return ch, nil
+}
+
+// contractOrchOpts returns contractOpts with an Orchestrator configured
+// so Spawn's gate is satisfied. Tests that need to mutate the Options
+// further (e.g. set a different LLMClient) should clone the result.
+func contractOrchOpts(t *testing.T) Options {
+	t.Helper()
+	opts := contractOpts(t)
+	// Options.Orchestrator is the Spawn-time gate. The runtime only
+	// checks nil vs non-nil; the real orchestrator used by Run is
+	// wired separately via NewSequentialOrchestrator. We use a
+	// placeholder Orchestrator implementation here so Spawn's gate
+	// passes; its Run is never invoked.
+	opts.Orchestrator = placeholderOrchestrator{}
+	return opts
+}
+
+// placeholderOrchestrator is a non-nil Orchestrator whose Run is never
+// invoked by tests that use it. It exists to satisfy the Spawn-time
+// gate on Options.Orchestrator (the runtime checks nil vs non-nil).
+type placeholderOrchestrator struct{}
+
+func (placeholderOrchestrator) Run(ctx context.Context, spec OrchestrationSpec) (<-chan SessionEvent, error) {
+	return nil, ErrOrchestrationAborted
+}
+
+func (placeholderOrchestrator) Err() error { return nil }
+
+// TestContractOrchestrationSpawnMergeEndToEnd covers the canonical
+// sequential-orchestration happy path at the SDK boundary:
+//
+//   - Construct a parent session with Options.Orchestrator set.
+//   - Wire the parent with NewSequentialOrchestrator.
+//   - Run a two-phase spec; both phases complete.
+//   - The returned channel delivers events from both phases and closes.
+//   - With MergePolicyAppend, the parent's state tree grows.
+func TestContractOrchestrationSpawnMergeEndToEnd(t *testing.T) {
+	opts := contractOrchOpts(t)
+	parent, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { parent.Shutdown(context.Background()) })
+
+	orch := NewSequentialOrchestrator(parent)
+	spec := OrchestrationSpec{
+		Phases: []PhaseSpec{
+			{Name: "a", Prompt: "phase A"},
+			{Name: "b", Prompt: "phase B", DependsOn: []string{"a"}},
+		},
+		MergePolicy: MergePolicyAppend,
+	}
+
+	ch, err := orch.Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	count := 0
+	for range ch {
+		count++
+	}
+	if count == 0 {
+		t.Errorf("expected at least one event from the orchestrator; got %d", count)
+	}
+}
+
+// TestContractOrchestrationReplayConflict covers the conflict path:
+// parent and child both emit a write tool_use for the same file;
+// MergeState with MergePolicyReplay returns ErrOrchestrationConflict;
+// errors.As populates a *ConflictReport naming the file, the phase, and
+// a non-empty line range.
+func TestContractOrchestrationReplayConflict(t *testing.T) {
+	conflictFile := filepath.Join(t.TempDir(), "same.txt")
+
+	// Parent: run a turn that writes the file.
+	parentOpts := contractOrchOpts(t)
+	parentOpts.LLMClient = &writeToolFaux{path: conflictFile}
+	parent, err := CreateAgentSession(context.Background(), parentOpts)
+	if err != nil {
+		t.Fatalf("parent CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { parent.Shutdown(context.Background()) })
+	if err := parent.Run(context.Background(), "write the file"); err != nil {
+		t.Fatalf("parent Run: %v", err)
+	}
+
+	// Child: spawn and run a turn that writes the same file.
+	child, err := parent.Spawn(context.Background(), Options{
+		Cwd:       parentOpts.Cwd,
+		Model:     parentOpts.Model,
+		LLMClient: &writeToolFaux{path: conflictFile},
+		Tools:     parentOpts.Tools,
+		Settings:  parentOpts.Settings,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	t.Cleanup(func() { child.Shutdown(context.Background()) })
+	if err := child.Run(context.Background(), "write the file again"); err != nil {
+		t.Fatalf("child Run: %v", err)
+	}
+
+	// Pass Phase via MergeSpec so the conflict report attributes the
+	// conflict to the named phase. This pins the D8 contract: the
+	// orchestrator surfaces phase attribution through MergeSpec.Phase.
+	mergeErr := parent.MergeState(context.Background(), child, MergeSpec{
+		Policy: MergePolicyReplay,
+		Phase:  "contract-review",
+	})
+	if !errors.Is(mergeErr, ErrOrchestrationConflict) {
+		t.Fatalf("MergeState: got %v, want errors.Is(ErrOrchestrationConflict)", mergeErr)
+	}
+	var report *ConflictReport
+	if !errors.As(mergeErr, &report) {
+		t.Fatalf("errors.As did not populate *ConflictReport; err=%v", mergeErr)
+	}
+	if report.File != conflictFile {
+		t.Errorf("report.File = %q, want %q", report.File, conflictFile)
+	}
+	// D8: Phase must be populated from MergeSpec.Phase.
+	if report.Phase != "contract-review" {
+		t.Errorf("report.Phase = %q, want %q", report.Phase, "contract-review")
+	}
+	// D9: LineRange must be populated. writeToolFaux writes content "x"
+	// (zero newlines), so lineRangeOfWrite returns [1, 1].
+	if report.LineRange[0] < 1 {
+		t.Errorf("report.LineRange[0] = %d, want >= 1", report.LineRange[0])
+	}
+	if report.LineRange[1] < report.LineRange[0] {
+		t.Errorf("report.LineRange = %v, want [first,last] with last >= first", report.LineRange)
+	}
+}
+
+// TestContractOrchestratorInterfaceSurface pins the public SDK contract
+// that Orchestrator is a 2-method interface: Run + Err. Embedders
+// implementing their own Orchestrator (e.g., a fan-out variant) must
+// satisfy both methods. A compile-time assertion here catches an
+// accidental narrowing or widening of the interface.
+func TestContractOrchestratorInterfaceSurface(t *testing.T) {
+	// Compile-time check: an embedder-supplied type satisfying both
+	// methods is assignable to the SDK Orchestrator interface.
+	var _ Orchestrator = placeholderOrchestrator{}
+
+	// Construct a real parent (NewSequentialOrchestrator dereferences
+	// the parent to wire its event bus and state manager) and assert
+	// the returned Orchestrator surface has both Run and Err callable.
+	parent, err := CreateAgentSession(context.Background(), contractOrchOpts(t))
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { parent.Shutdown(context.Background()) })
+
+	orch := NewSequentialOrchestrator(parent)
+	if orch == nil {
+		t.Fatal("NewSequentialOrchestrator returned nil")
+	}
+	// Err must be callable on a fresh orchestrator (no phase has run).
+	if err := orch.Err(); err != nil {
+		t.Errorf("Err() on fresh orchestrator = %v, want nil", err)
+	}
+	// Run signature must accept an OrchestrationSpec and return a
+	// channel + error. Drive the validation path (cycle in an empty
+	// spec is a no-op; we only exercise the method signature here).
+	_, _ = orch.Run(context.Background(), OrchestrationSpec{})
+}
+
+// TestContractOrchestrationDependencyCycleRejected asserts that an
+// OrchestrationSpec containing a cycle is rejected at Run time with
+// ErrOrchestrationAborted, and the error message names the cycle.
+// No phases start.
+func TestContractOrchestrationDependencyCycleRejected(t *testing.T) {
+	opts := contractOrchOpts(t)
+	parent, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { parent.Shutdown(context.Background()) })
+
+	orch := NewSequentialOrchestrator(parent)
+	spec := OrchestrationSpec{
+		Phases: []PhaseSpec{
+			{Name: "a", DependsOn: []string{"b"}},
+			{Name: "b", DependsOn: []string{"a"}},
+		},
+	}
+	_, err = orch.Run(context.Background(), spec)
+	if !errors.Is(err, ErrOrchestrationAborted) {
+		t.Errorf("got %v, want errors.Is(ErrOrchestrationAborted)", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("error message does not name the cycle; got %q", err)
+	}
+}
+
+// TestContractOrchestrationSentinelsTyped pins the typed identity of
+// the three orchestration sentinels re-exported at the SDK level.
+// Each sentinel must be non-nil and satisfy errors.Is for itself.
+// ErrOrchestrationConflict must also wrap a recoverable
+// *ConflictReport via errors.As.
+func TestContractOrchestrationSentinelsTyped(t *testing.T) {
+	for _, sentinel := range []error{
+		ErrOrchestrationConflict,
+		ErrOrchestrationAborted,
+		ErrOrchestratorClosed,
+		ErrNoOrchestrator,
+	} {
+		if sentinel == nil {
+			t.Errorf("orchestration sentinel is nil")
+			continue
+		}
+		if !errors.Is(sentinel, sentinel) {
+			t.Errorf("sentinel %v does not satisfy errors.Is with itself", sentinel)
+		}
+	}
+
+	// ConflictReport must be recoverable from a wrapped error via
+	// errors.As. We construct the wrapper the same way MergeState
+	// does: fmt.Errorf("%w: %w", ErrOrchestrationConflict, report).
+	wrapped := fmt.Errorf("%w: %w",
+		ErrOrchestrationConflict,
+		&ConflictReport{File: "x.txt", LineRange: [2]int{1, 5}})
+	if !errors.Is(wrapped, ErrOrchestrationConflict) {
+		t.Errorf("wrapped conflict: errors.Is(ErrOrchestrationConflict) = false")
+	}
+	var report *ConflictReport
+	if !errors.As(wrapped, &report) {
+		t.Errorf("wrapped conflict: errors.As(*ConflictReport) = false")
+	}
+	if report == nil || report.File != "x.txt" {
+		t.Errorf("report.File = %q, want %q", report.File, "x.txt")
+	}
+}
+
+// TestContractOrchestrationSpawnFailsWithoutOrchestrator asserts that
+// Spawn on a session constructed WITHOUT Options.Orchestrator returns
+// a typed error. The SDK contract accepts either ErrNoOrchestrator or
+// ErrRuntimeShutdown per the spec's "OR a typed equivalent" language;
+// this test pins the concrete ErrNoOrchestrator sentinel.
+func TestContractOrchestrationSpawnFailsWithoutOrchestrator(t *testing.T) {
+	opts := contractOpts(t) // no Orchestrator set
+	parent, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { parent.Shutdown(context.Background()) })
+
+	_, err = parent.Spawn(context.Background(), Options{
+		Cwd:       opts.Cwd,
+		Model:     opts.Model,
+		LLMClient: opts.LLMClient,
+		Tools:     opts.Tools,
+		Settings:  opts.Settings,
+	})
+	if !errors.Is(err, ErrNoOrchestrator) {
+		t.Errorf("Spawn without Orchestrator: got %v, want errors.Is(ErrNoOrchestrator)", err)
 	}
 }

@@ -183,6 +183,16 @@ func toLowerSet(names []string) map[string]struct{} {
 // JSON payload. Returns "" when no path field is present or the input is not
 // a JSON object.
 func extractPath(input json.RawMessage) string {
+	return PathFromInput(input)
+}
+
+// PathFromInput extracts the first non-empty path-like field from a tool
+// call's input JSON. Checks "path", "file_path", "filePath" in order.
+// Returns "" when no path field is present or the input is not a JSON
+// object. Exported so other packages (e.g., agent.MergeState conflict
+// detection) share the same path extraction logic as the compaction
+// pipeline.
+func PathFromInput(input json.RawMessage) string {
 	if len(input) == 0 {
 		return ""
 	}

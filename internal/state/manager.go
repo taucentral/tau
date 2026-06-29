@@ -60,6 +60,16 @@ type Manager interface {
 	// ParentID, and Timestamp (any caller-supplied values are ignored).
 	Append(entry Entry) (string, error)
 
+	// AppendAt writes entry as a child of parentID and returns the
+	// assigned ID. Unlike Append, AppendAt does NOT change any leaf
+	// pointer — the caller owns leaf movement via SetLeaf. Used by
+	// branchManager (internal/state/branch.go) to write into a shared
+	// backing store without disturbing the parent's leaf, and by
+	// MergeState to integrate a branch's entries one at a time.
+	//
+	// Returns ErrInvalidBranch when parentID is not in the tree.
+	AppendAt(entry Entry, parentID string) (string, error)
+
 	// Branch moves the leaf pointer to fromID without writing a new
 	// entry. Future appends descend from fromID; the previously-active
 	// path remains in the tree. Returns ErrInvalidBranch if fromID is

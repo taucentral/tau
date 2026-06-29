@@ -45,6 +45,13 @@ type lazyManager struct {
 // Append of an assistant message. Per state-tree spec scenario "Aborted
 // before first response": if Close is called before any assistant message,
 // no file appears on disk.
+//
+// The SessionHeader root is materialized in the buffer at Create time so
+// that Tree(), LeafID(), and AppendAt() all work before flush. This is
+// essential for the orchestration seam: MergeState calls AppendAt on a
+// parent that may never have had Run (and thus never had Append) called
+// directly. Without a materialized root, there is nothing to parent onto.
+// flushLocked skips this synthetic root (CreateManager writes its own).
 func Create(cwd string, header SessionHeaderPayload) (Manager, error) {
 	if cwd == "" {
 		return nil, errors.New("state: Create requires non-empty cwd")
@@ -54,7 +61,23 @@ func Create(cwd string, header SessionHeaderPayload) (Manager, error) {
 	if header.CreatedAt.IsZero() {
 		header.CreatedAt = time.Now().UTC()
 	}
-	return &lazyManager{cwd: cwd, header: header}, nil
+	rootID, err := NewID(func(string) bool { return false })
+	if err != nil {
+		return nil, err
+	}
+	root := Entry{
+		ID:        rootID,
+		ParentID:  "",
+		Kind:      KindSessionHeader,
+		Timestamp: header.CreatedAt,
+		Payload:   header,
+	}
+	return &lazyManager{
+		cwd:    cwd,
+		header: header,
+		buffer: []Entry{root},
+		leafID: rootID,
+	}, nil
 }
 
 // Append buffers the entry (pre-flush) or delegates to bolt (post-flush).
@@ -106,7 +129,8 @@ func (m *lazyManager) Append(entry Entry) (string, error) {
 }
 
 // flushLocked creates the .bolt file via CreateManager, then batch-writes
-// the buffer re-parented onto the new root. Called with m.mu held.
+// the buffer (minus the synthetic root) re-parented onto the new bolt root.
+// Called with m.mu held.
 func (m *lazyManager) flushLocked() error {
 	mgr, err := CreateManager(m.cwd, m.header)
 	if err != nil {
@@ -121,36 +145,58 @@ func (m *lazyManager) flushLocked() error {
 		return fmt.Errorf("state: lazy flush: CreateManager returned %T, want *boltManager", mgr)
 	}
 
-	// The freshly-created SessionHeader's ID becomes the parent of the
-	// buffer's first entry.
+	// The freshly-created bolt SessionHeader's ID is the real root.
 	rootID := bolt.leafID
 
-	// Re-parent: walk the buffer; each entry's ParentID either needs to
-	// be set to rootID (first entry, which currently has ParentID="" or
-	// points to an earlier buffer entry that itself hangs off root) or
-	// stays as-is (entries after the first already reference their
-	// predecessor in the buffer).
-	//
-	// The chain is reconstructed by walking the buffer in order: the
-	// first entry's current ParentID is "" (it was the root of the
-	// buffer's local chain) and gets rewritten to rootID. Subsequent
-	// entries' ParentIDs are non-empty and reference earlier buffer
-	// entries; those stay correct because the IDs are preserved.
-	batch := make([]Entry, len(m.buffer))
-	copy(batch, m.buffer)
-	if len(batch) > 0 && batch[0].ParentID == "" {
-		batch[0].ParentID = rootID
+	// The buffer starts with a synthetic SessionHeader root (materialized
+	// at Create time). Skip it — CreateManager already wrote its own —
+	// and re-parent any entries that reference the synthetic root onto
+	// the bolt root.
+	var batch []Entry
+	if len(m.buffer) > 0 && m.buffer[0].Kind == KindSessionHeader {
+		syntheticRootID := m.buffer[0].ID
+		batch = make([]Entry, 0, len(m.buffer)-1)
+		for _, e := range m.buffer[1:] {
+			if e.ParentID == syntheticRootID {
+				e.ParentID = rootID
+			}
+			batch = append(batch, e)
+		}
+	} else {
+		// Defensive: buffer without a leading SessionHeader root
+		// (legacy / manually constructed). Use the old re-parent logic.
+		batch = make([]Entry, len(m.buffer))
+		copy(batch, m.buffer)
+		if len(batch) > 0 && batch[0].ParentID == "" {
+			batch[0].ParentID = rootID
+		}
 	}
 
 	if err := bolt.store.AppendBatch(batch); err != nil {
 		bolt.Close()
 		return fmt.Errorf("state: lazy flush: batch write: %w", err)
 	}
-	if err := bolt.store.SetLeaf(m.leafID); err != nil {
+
+	// Translate leaf: the synthetic root's ID doesn't exist in the bolt
+	// store. If m.leafID still points at the synthetic root (no Append
+	// or AppendAt has advanced it past the root), use the bolt root's ID.
+	// AppendAt does NOT advance m.leafID, so also check for "" (legacy).
+	leafForBolt := m.leafID
+	if len(m.buffer) > 0 && m.buffer[0].Kind == KindSessionHeader && leafForBolt == m.buffer[0].ID {
+		leafForBolt = rootID
+	} else if leafForBolt == "" {
+		if len(batch) > 0 {
+			leafForBolt = batch[len(batch)-1].ID
+		} else {
+			leafForBolt = rootID
+		}
+	}
+	if err := bolt.store.SetLeaf(leafForBolt); err != nil {
 		bolt.Close()
 		return fmt.Errorf("state: lazy flush: set leaf: %w", err)
 	}
-	bolt.leafID = m.leafID
+	bolt.leafID = leafForBolt
+	m.leafID = leafForBolt // keep lazy leaf in sync with bolt leaf
 
 	m.bolt = bolt
 	m.buffer = nil
@@ -168,6 +214,86 @@ func isAssistantMessage(e Entry) bool {
 		return false
 	}
 	return mp.Role == llm.RoleAssistant
+}
+
+// AppendAt writes entry as a child of parentID without advancing the
+// leaf pointer. Pre-flush, the entry goes to the buffer; an assistant
+// Message payload triggers flushLocked (which batch-writes the buffer to
+// the new .bolt file without advancing the leaf). Post-flush, this
+// delegates to boltManager.AppendAt.
+//
+// Returns ErrInvalidBranch when parentID is not in the buffer (pre-flush)
+// or the store (post-flush).
+func (m *lazyManager) AppendAt(entry Entry, parentID string) (string, error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", ErrManagerClosed
+	}
+	if m.bolt != nil {
+		bolt := m.bolt
+		m.mu.Unlock()
+		return bolt.AppendAt(entry, parentID)
+	}
+
+	// Pre-flush: validate parentID in buffer.
+	// Special case: when the buffer is empty (no root materialized yet —
+	// e.g. MergeState integrating child entries into a parent that has
+	// never had Append called directly), accept parentID == "" as
+	// appending to the implicit root. The entry becomes the first entry
+	// in the buffer's local tree; flushLocked will re-parent it onto the
+	// bolt root when flush is triggered.
+	if len(m.buffer) == 0 && parentID == "" {
+		// Allow: the entry becomes the buffer's first entry.
+	} else {
+		found := false
+		for _, e := range m.buffer {
+			if e.ID == parentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.mu.Unlock()
+			return "", fmt.Errorf("%w: parent %q not in tree", ErrInvalidBranch, parentID)
+		}
+	}
+
+	id, err := NewID(func(candidate string) bool {
+		for _, e := range m.buffer {
+			if e.ID == candidate {
+				return true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		m.mu.Unlock()
+		return "", err
+	}
+	e := Entry{
+		ID:        id,
+		ParentID:  parentID,
+		Kind:      kindOf(entry.Payload),
+		Timestamp: time.Now().UTC(),
+		Payload:   entry.Payload,
+	}
+	m.buffer = append(m.buffer, e)
+	// Intentionally do NOT advance m.leafID — that's the AppendAt contract.
+
+	// Flush on first assistant message. flushLocked batch-writes the
+	// buffer (which now includes this entry) to the new .bolt file, then
+	// sets bolt.leafID = m.leafID. Because AppendAt did NOT advance
+	// m.leafID, bolt's leaf stays at the prior leaf — which is correct.
+	flushErr := error(nil)
+	if isAssistantMessage(e) {
+		flushErr = m.flushLocked()
+	}
+	m.mu.Unlock()
+	if flushErr != nil {
+		return "", flushErr
+	}
+	return id, nil
 }
 
 // Branch moves the leaf pointer to fromID. Pre-flush, the new leaf must

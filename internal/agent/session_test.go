@@ -513,13 +513,16 @@ func TestRun_EmptyUserInput(t *testing.T) {
 	if err := sess.Run(context.Background(), ""); err == nil {
 		t.Fatal("Run with empty input should fail")
 	}
-	// Run with empty input must NOT have appended anything. The lazy
-	// manager starts with no entries; querying Tree() would return
-	// "lazy manager has no entries yet" which is not a meaningful
-	// assertion. Instead, check LeafID: a fresh session has LeafID == ""
-	// (no SessionHeader is materialized until the first Append).
-	if leaf := rt.State.LeafID(); leaf != "" {
-		t.Errorf("LeafID = %q after rejected empty-input Run; want empty", leaf)
+	// Run with empty input must NOT have appended any user entries. The
+	// lazy manager materializes the SessionHeader root at Create time, so
+	// LeafID is the root's ID (non-empty). Instead, check that the tree
+	// contains exactly one entry (the root) — no user message was appended.
+	tree, err := rt.State.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if got := tree.Len(); got != 1 {
+		t.Errorf("tree len = %d after rejected empty-input Run; want 1 (root only)", got)
 	}
 	sess.Shutdown(context.Background())
 }

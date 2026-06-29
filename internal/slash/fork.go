@@ -32,6 +32,13 @@ func (forkCommand) Execute(ctx context.Context, args string, session *agent.Agen
 	if leafID == "" {
 		return "", errors.New("/fork: no entries to fork from (session is empty)")
 	}
+	// The lazy manager materializes a synthetic SessionHeader root at
+	// Create time, so LeafID is non-empty even on a fresh session. Detect
+	// "empty" by checking the tree length: only the root means nothing
+	// meaningful to fork from.
+	if tree, err := rt.State.Tree(); err == nil && tree.Len() <= 1 {
+		return "", errors.New("/fork: no entries to fork from (session is empty)")
+	}
 
 	newID, err := rt.State.BranchWithSummary(ctx, leafID, summarizerClient(session))
 	if err != nil {

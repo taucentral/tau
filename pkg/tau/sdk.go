@@ -25,6 +25,7 @@ import (
 	"github.com/coevin/tau/internal/llm"
 	"github.com/coevin/tau/internal/llm/provider/anthropic"
 	"github.com/coevin/tau/internal/llm/provider/openai"
+	"github.com/coevin/tau/internal/orchestrator"
 	"github.com/coevin/tau/internal/plugins"
 	"github.com/coevin/tau/internal/slash"
 	"github.com/coevin/tau/internal/storage"
@@ -465,6 +466,25 @@ type Options struct {
 	//     backed backend; implement Store directly for vector / sqlite
 	//     / external backends.
 	Store Store
+
+	// Orchestrator, when non-nil, enables multi-session orchestration
+	// on this session. The orchestrator drives Spawn / MergeState
+	// workflows in-process; see the Orchestration section in doc.go
+	// for the full lifecycle contract. nil disables orchestration:
+	// Spawn returns ErrRuntimeShutdown and MergeState returns
+	// ErrOrchestratorClosed.
+	//
+	// Lifecycle contract:
+	//   - The runtime NEVER calls any method on an orchestrator
+	//     supplied here, including during Shutdown. The embedder owns
+	//     the orchestrator's lifecycle.
+	//   - Children spawned via AgentSession.Spawn are NOT shut down
+	//     automatically by the parent's Shutdown. The embedder
+	//     coordinates child lifetimes explicitly.
+	//   - Construct via NewSequentialOrchestrator(parent) for the
+	//     reference sequential-phase implementation; implement
+	//     Orchestrator directly for fan-out / adversarial review.
+	Orchestrator Orchestrator
 }
 
 // --- Constructor and session handle ----------------------------------------
@@ -497,6 +517,7 @@ func CreateAgentSession(ctx context.Context, opts Options) (*AgentSession, error
 		SlashCommands: opts.SlashCommands,
 		Middleware:    mw,
 		Store:         opts.Store,
+		Orchestrator:  opts.Orchestrator,
 	}
 	rt, err := agent.CreateAgentSessionRuntime(ctx, opts.Cwd, so)
 	if err != nil {
@@ -726,6 +747,140 @@ func (s *AgentSession) Store() Store {
 		return nil
 	}
 	return s.rt.Options.Store
+}
+
+// Orchestrator returns the orchestrator injected via Options.Orchestrator,
+// or nil when no orchestrator is configured. The returned value satisfies
+// the Orchestrator interface; callers may type-assert to a concrete
+// implementation (e.g. *SequentialOrchestrator) when they need
+// implementation-specific behaviour.
+func (s *AgentSession) Orchestrator() Orchestrator {
+	if s == nil || s.rt == nil {
+		return nil
+	}
+	if s.rt.Options.Orchestrator == nil {
+		return nil
+	}
+	o, _ := s.rt.Options.Orchestrator.(Orchestrator)
+	return o
+}
+
+// Spawn constructs a child AgentSession with its own state-tree branch
+// and (optionally) inherited LLMClient/Model. The child is a fully
+// functional *AgentSession; its Run, Shutdown, Subscribe, etc. methods
+// behave identically to a top-level session.
+//
+// Spawn returns ErrNoOrchestrator when the parent has no orchestrator
+// configured (Options.Orchestrator is nil), and ErrRuntimeShutdown
+// when the parent's Shutdown has completed. Either is acceptable per
+// the spec's "OR a typed equivalent" language; the contract test
+// accepts both.
+//
+// opts is a fresh Options bundle; required fields (Cwd, Model,
+// LLMClient, Tools, Settings) MUST be populated unless the caller
+// expects inheritance. Cwd is always inherited from the parent (the
+// SessionOptions layer has no Cwd field). LLMClient and Model are
+// inherited when zero-value. Tools, Settings, and Middleware are
+// NEVER inherited; they MUST be supplied.
+//
+// The runtime NEVER calls Shutdown on the returned child when the
+// parent shuts down. The embedder owns the child's lifecycle.
+func (s *AgentSession) Spawn(ctx context.Context, opts Options) (*AgentSession, error) {
+	if s == nil || s.sess == nil {
+		return nil, ErrRuntimeShutdown
+	}
+	child, err := s.sess.Spawn(ctx, adaptOptionsToInternal(opts))
+	if err != nil {
+		return nil, err
+	}
+	return &AgentSession{sess: child, rt: child.Runtime()}, nil
+}
+
+// MergeState reconciles a child session's state tree into the parent
+// according to spec.Policy. See the MergePolicy documentation for the
+// three policies' semantics.
+//
+// Returns:
+//   - nil on success.
+//   - ErrNoOrchestrator — parent has no orchestrator configured.
+//   - ErrOrchestratorClosed — child's state-tree pointer is nil.
+//   - ErrOrchestrationConflict (MergePolicyReplay only) — wraps a
+//     *ConflictReport; recover via errors.As(err, &report) where
+//     report is a *ConflictReport.
+//
+// On conflict the parent's state is unchanged (preceding replayed
+// entries are NOT rolled back; callers who need atomicity should
+// snapshot before calling).
+func (s *AgentSession) MergeState(ctx context.Context, child *AgentSession, spec MergeSpec) error {
+	if s == nil || s.sess == nil || child == nil || child.sess == nil {
+		return ErrOrchestratorClosed
+	}
+	shell := agent.MergeSpecShell{
+		Policy:           agent.MergePolicyShell(spec.Policy),
+		Phase:            spec.Phase,
+		ConflictCallback: adaptConflictCallback(spec.ConflictCallback),
+	}
+	return s.sess.MergeState(ctx, child.sess, shell)
+}
+
+// adaptConflictCallback wraps a public SDK conflict callback so the
+// runtime can invoke it. The wrapping is identity-preserving: the
+// *ConflictReport passed to the SDK callback is the same pointer the
+// runtime produced (because pkg/tau.ConflictReport IS agent.ConflictReportShell
+// via type alias).
+func adaptConflictCallback(cb func(*ConflictReport) error) func(*agent.ConflictReportShell) error {
+	if cb == nil {
+		return nil
+	}
+	return func(r *agent.ConflictReportShell) error {
+		return cb((*ConflictReport)(r))
+	}
+}
+
+// adaptOptionsToInternal converts the public SDK Options bundle to the
+// internal/agent.SessionOptions shape expected by the runtime. The
+// conversion is shallow; the SDK re-uses the caller's slice/map headers
+// where possible.
+func adaptOptionsToInternal(opts Options) agent.SessionOptions {
+	mw, _ := partitionMiddleware(opts.Middleware)
+	so := agent.SessionOptions{
+		Model:          opts.Model,
+		ThinkingLevel:  opts.ThinkingLevel,
+		Settings:       opts.Settings,
+		Transport:      opts.Transport,
+		SteeringMode:   opts.SteeringMode,
+		Tools:          opts.Tools,
+		Plugins:        opts.Plugins,
+		LLMClient:      opts.LLMClient,
+		StateManager:   opts.StateManager,
+		ContextWindow:  opts.ContextWindow,
+		ConfigDir:      opts.ConfigDir,
+		SessionID:      opts.SessionID,
+		SlashCommands:  opts.SlashCommands,
+		Middleware:     mw,
+		Store:          opts.Store,
+		Orchestrator:   opts.Orchestrator,
+	}
+	return so
+}
+
+// NewSequentialOrchestrator returns the reference sequential-phase
+// Orchestrator. Phases execute strictly in dependency order; cycles
+// are rejected at Run time. Each phase spawns a child session, runs
+// the phase prompt, drains events onto the multiplexed channel, and
+// (when MergePolicy is not MergePolicyNone) calls MergeState before
+// proceeding.
+//
+// The parent MUST have been constructed with Options.Orchestrator set
+// (otherwise parent.Spawn will return ErrNoOrchestrator at Run time).
+// The returned Orchestrator does NOT take ownership of the parent;
+// the caller owns the parent's lifecycle.
+//
+// See the Orchestration section in doc.go for the full lifecycle
+// contract and the cookbook at docs/sdk/cookbook.md recipe (i) for a
+// worked example.
+func NewSequentialOrchestrator(parent *AgentSession) Orchestrator {
+	return orchestrator.NewSequentialOrchestrator(parent.sess)
 }
 
 // NewInMemoryManager returns a StateManager that keeps the entire state

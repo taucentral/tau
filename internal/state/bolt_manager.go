@@ -154,6 +154,51 @@ func (m *boltManager) Append(entry Entry) (string, error) {
 	return id, nil
 }
 
+// AppendAt writes entry as a child of parentID and returns the assigned
+// ID. Unlike Append, AppendAt does NOT advance the leaf pointer — the
+// caller owns leaf movement via SetLeaf. Used by branchManager to write
+// into a shared backing store without disturbing the parent's leaf, and
+// by MergeState to integrate a branch's entries one at a time without
+// disturbing the parent's leaf mid-walk.
+//
+// Returns ErrInvalidBranch when parentID is not in the store.
+func (m *boltManager) AppendAt(entry Entry, parentID string) (string, error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", ErrManagerClosed
+	}
+	m.mu.Unlock()
+
+	// Validate parentID exists in the store.
+	if _, err := m.store.Get(parentID); err != nil {
+		if errors.Is(err, ErrEntryNotFound) {
+			return "", fmt.Errorf("%w: parent %q not in tree", ErrInvalidBranch, parentID)
+		}
+		return "", err
+	}
+
+	id, err := NewID(func(candidate string) bool {
+		ok, err := m.store.Exists(candidate)
+		return err != nil || ok
+	})
+	if err != nil {
+		return "", err
+	}
+	e := Entry{
+		ID:        id,
+		ParentID:  parentID,
+		Kind:      kindOf(entry.Payload),
+		Timestamp: time.Now().UTC(),
+		Payload:   entry.Payload,
+	}
+	if err := m.store.Append(e); err != nil {
+		return "", err
+	}
+	// Intentionally do NOT call SetLeaf — that's the AppendAt contract.
+	return id, nil
+}
+
 // Branch moves the leaf pointer to fromID. Future appends descend from
 // fromID; the previously-active path remains in the tree.
 func (m *boltManager) Branch(fromID string) error {
