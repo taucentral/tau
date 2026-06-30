@@ -24,7 +24,7 @@ type helpCommand struct {
 func (h *helpCommand) Name() string      { return "/help" }
 func (h *helpCommand) ShortHelp() string { return "Show this list of commands" }
 
-func (h *helpCommand) Execute(_ context.Context, _ string, _ *agent.AgentSession) (string, error) {
+func (h *helpCommand) Execute(_ context.Context, _ string, _ agent.CommandSession) (string, error) {
 	if h.registry == nil {
 		return "", errors.New("/help: registry not wired")
 	}

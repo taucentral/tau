@@ -39,14 +39,15 @@ func newModelCommand() Command { return modelCommand{} }
 func (modelCommand) Name() string      { return "/model" }
 func (modelCommand) ShortHelp() string { return "Show the active model + list, or switch to <id>" }
 
-func (modelCommand) Execute(_ context.Context, args string, session *agent.AgentSession) (string, error) {
+func (modelCommand) Execute(_ context.Context, args string, session agent.CommandSession) (string, error) {
 	if session == nil {
 		return "", errors.New("/model: session is nil")
 	}
 	rt := session.Runtime()
-	current := rt.Options.Model
-	currentAPI := rt.Options.ProviderAPI
-	known := rt.Options.KnownModels
+	opts := rt.Options()
+	current := opts.Model()
+	currentAPI := opts.ProviderAPI()
+	known := opts.KnownModels()
 
 	args = strings.TrimSpace(args)
 	if args == "" {
@@ -63,13 +64,13 @@ func (modelCommand) Execute(_ context.Context, args string, session *agent.Agent
 	// Apply the change but be honest in the response — don't claim the
 	// switch was verified the way the previous implementation did.
 	if len(known) == 0 {
-		if _, err := rt.State.Append(state.Entry{
+		if _, err := rt.State().Append(state.Entry{
 			Kind:    state.KindModelChange,
 			Payload: state.ModelChangePayload{Model: args},
 		}); err != nil {
 			return "", fmt.Errorf("/model: %w", err)
 		}
-		rt.Options.Model = args
+		opts.SetModel(args)
 		return fmt.Sprintf("model: %s → %s\n  warning: no models.json configured; id not validated. Restart tau with --model %q if the provider changed.", current, args, args), nil
 	}
 
@@ -92,7 +93,7 @@ func (modelCommand) Execute(_ context.Context, args string, session *agent.Agent
 			args, match.Model.API, currentAPI, args, providerHint)
 	}
 
-	if _, err := rt.State.Append(state.Entry{
+	if _, err := rt.State().Append(state.Entry{
 		Kind:    state.KindModelChange,
 		Payload: state.ModelChangePayload{Model: match.Model.ID},
 	}); err != nil {
@@ -102,7 +103,7 @@ func (modelCommand) Execute(_ context.Context, args string, session *agent.Agent
 	// payloads carry exactly what models.json declares (model ids are
 	// case-sensitive on the provider wire; letting users accumulate
 	// differently-cased duplicates would leak as request errors later).
-	rt.Options.Model = match.Model.ID
+	opts.SetModel(match.Model.ID)
 	return fmt.Sprintf("model: %s → %s", current, match.Model.ID), nil
 }
 

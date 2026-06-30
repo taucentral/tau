@@ -19,7 +19,7 @@ func newTreeCommand() Command { return treeCommand{} }
 func (treeCommand) Name() string      { return "/tree" }
 func (treeCommand) ShortHelp() string { return "Open the branch tree viewer" }
 
-func (treeCommand) Execute(_ context.Context, _ string, session *agent.AgentSession) (string, error) {
+func (treeCommand) Execute(_ context.Context, _ string, session agent.CommandSession) (string, error) {
 	if session == nil {
 		return "", errors.New("/tree: session is nil")
 	}

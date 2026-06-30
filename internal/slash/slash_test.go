@@ -124,7 +124,7 @@ func TestRegistry_Names(t *testing.T) {
 
 func TestRegistry_Execute_UnknownCommand(t *testing.T) {
 	r := NewRegistry()
-	_, err := r.Execute(context.Background(), "/nosuch", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/nosuch", newTestSession(t).AsCommandSession())
 	if !errors.Is(err, ErrUnknownCommand) {
 		t.Errorf("err = %v, want ErrUnknownCommand", err)
 	}
@@ -142,7 +142,7 @@ func TestRegistry_Execute_NotASlashCommand(t *testing.T) {
 
 func TestQuitCommand(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/quit", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/quit", newTestSession(t).AsCommandSession())
 	if !errors.Is(err, ErrQuitRequested) {
 		t.Errorf("/quit: err = %v, want ErrQuitRequested", err)
 	}
@@ -150,7 +150,7 @@ func TestQuitCommand(t *testing.T) {
 
 func TestClearCommand(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/clear", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/clear", newTestSession(t).AsCommandSession())
 	if !errors.Is(err, ErrClearViewport) {
 		t.Errorf("/clear: err = %v, want ErrClearViewport", err)
 	}
@@ -158,7 +158,7 @@ func TestClearCommand(t *testing.T) {
 
 func TestTreeCommand(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/tree", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/tree", newTestSession(t).AsCommandSession())
 	if !errors.Is(err, ErrShowTree) {
 		t.Errorf("/tree: err = %v, want ErrShowTree", err)
 	}
@@ -167,7 +167,7 @@ func TestTreeCommand(t *testing.T) {
 func TestModelCommand_PrintCurrent_FauxNoRegistry(t *testing.T) {
 	r := DefaultRegistry()
 	sess := newTestSession(t)
-	out, err := r.Execute(context.Background(), "/model", sess)
+	out, err := r.Execute(context.Background(), "/model", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestModelCommand_PrintCurrent_FauxNoRegistry(t *testing.T) {
 func TestModelCommand_SwitchesWithoutValidationWhenNoRegistry(t *testing.T) {
 	r := DefaultRegistry()
 	sess := newTestSession(t)
-	out, err := r.Execute(context.Background(), "/model new-model-id", sess)
+	out, err := r.Execute(context.Background(), "/model new-model-id", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model switch: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestModelCommand_AlreadyActive_NoStateChange(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	out, err := r.Execute(context.Background(), "/model claude-opus", sess)
+	out, err := r.Execute(context.Background(), "/model claude-opus", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model already-active: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestModelCommand_NoArgs_ListsKnownModels(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	out, err := r.Execute(context.Background(), "/model", sess)
+	out, err := r.Execute(context.Background(), "/model", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestModelCommand_SwitchesToKnownModel_SameAPI(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	out, err := r.Execute(context.Background(), "/model claude-sonnet", sess)
+	out, err := r.Execute(context.Background(), "/model claude-sonnet", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model same-api switch: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestModelCommand_RefusesUnknownModel_ListsAvailable(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	_, err := r.Execute(context.Background(), "/model bogus-model", sess)
+	_, err := r.Execute(context.Background(), "/model bogus-model", sess.AsCommandSession())
 	if err == nil {
 		t.Fatal("/model with unknown id should error when KnownModels is populated")
 	}
@@ -306,7 +306,7 @@ func TestModelCommand_RefusesCrossAPI(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	_, err := r.Execute(context.Background(), "/model gpt-4o", sess)
+	_, err := r.Execute(context.Background(), "/model gpt-4o", sess.AsCommandSession())
 	if err == nil {
 		t.Fatal("/model cross-API switch should error")
 	}
@@ -326,7 +326,7 @@ func TestModelCommand_CaseInsensitiveMatch(t *testing.T) {
 	}
 	sess := newTestSessionWithModels(t, known)
 
-	out, err := r.Execute(context.Background(), "/model CLAUDE-SONNET", sess)
+	out, err := r.Execute(context.Background(), "/model CLAUDE-SONNET", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/model case-insensitive: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestModelCommand_CaseInsensitiveMatch(t *testing.T) {
 
 func TestCheckoutCommand_NoEntryID(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/checkout", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/checkout", newTestSession(t).AsCommandSession())
 	if err == nil {
 		t.Error("/checkout with no arg: err = nil, want usage error")
 	}
@@ -348,7 +348,7 @@ func TestCheckoutCommand_NoEntryID(t *testing.T) {
 
 func TestCheckoutCommand_UnknownEntry(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/checkout nonexistent", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/checkout nonexistent", newTestSession(t).AsCommandSession())
 	if err == nil {
 		t.Error("/checkout unknown entry: err = nil, want error")
 	}
@@ -356,7 +356,7 @@ func TestCheckoutCommand_UnknownEntry(t *testing.T) {
 
 func TestLabelCommand_NoText(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/label", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/label", newTestSession(t).AsCommandSession())
 	if err == nil {
 		t.Error("/label with no text: err = nil, want usage error")
 	}
@@ -365,7 +365,7 @@ func TestLabelCommand_NoText(t *testing.T) {
 func TestLabelCommand_AppendsLabel(t *testing.T) {
 	r := DefaultRegistry()
 	sess := newTestSession(t)
-	out, err := r.Execute(context.Background(), "/label my label text", sess)
+	out, err := r.Execute(context.Background(), "/label my label text", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/label: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestLabelCommand_AppendsLabel(t *testing.T) {
 
 func TestForkCommand_EmptySession(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/fork", newTestSession(t))
+	_, err := r.Execute(context.Background(), "/fork", newTestSession(t).AsCommandSession())
 	if err == nil {
 		t.Error("/fork on empty session: err = nil, want error")
 	}
@@ -385,7 +385,7 @@ func TestForkCommand_EmptySession(t *testing.T) {
 func TestCompactCommand_PrintsNoCompactionNeeded(t *testing.T) {
 	r := DefaultRegistry()
 	sess := newTestSession(t)
-	out, err := r.Execute(context.Background(), "/compact", sess)
+	out, err := r.Execute(context.Background(), "/compact", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/compact: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestCompactCommand_PrintsNoCompactionNeeded(t *testing.T) {
 func TestHelpCommand_ListsAllCommands(t *testing.T) {
 	r := DefaultRegistry()
 	sess := newTestSession(t)
-	out, err := r.Execute(context.Background(), "/help", sess)
+	out, err := r.Execute(context.Background(), "/help", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/help: %v", err)
 	}
@@ -442,7 +442,7 @@ type recordingCommand struct {
 
 func (c *recordingCommand) Name() string      { return c.name }
 func (c *recordingCommand) ShortHelp() string { return "custom command for testing" }
-func (c *recordingCommand) Execute(ctx context.Context, args string, session *agent.AgentSession) (string, error) {
+func (c *recordingCommand) Execute(ctx context.Context, args string, session agent.CommandSession) (string, error) {
 	c.got = args
 	return "custom-command-output", nil
 }
@@ -463,7 +463,7 @@ func TestRegistry_ExecutesCustomCommand(t *testing.T) {
 	help.registry = reg
 
 	sess := newTestSession(t)
-	out, err := reg.Execute(context.Background(), "/custom arg-value", sess)
+	out, err := reg.Execute(context.Background(), "/custom arg-value", sess.AsCommandSession())
 	if err != nil {
 		t.Fatalf("/custom: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestRegistry_CustomCommandWithNoArgs(t *testing.T) {
 	reg.Register(cmd)
 
 	sess := newTestSession(t)
-	if _, err := reg.Execute(context.Background(), "/custom", sess); err != nil {
+	if _, err := reg.Execute(context.Background(), "/custom", sess.AsCommandSession()); err != nil {
 		t.Fatalf("/custom (no args): %v", err)
 	}
 	if cmd.got != "" {
@@ -503,13 +503,13 @@ func TestRegistry_CustomCommandCoexistsWithBuiltins(t *testing.T) {
 
 	sess := newTestSession(t)
 	// Built-in still dispatches.
-	if _, err := reg.Execute(context.Background(), "/quit", sess); err != nil {
+	if _, err := reg.Execute(context.Background(), "/quit", sess.AsCommandSession()); err != nil {
 		if !errors.Is(err, ErrQuitRequested) {
 			t.Errorf("/quit after custom register: err = %v, want ErrQuitRequested", err)
 		}
 	}
 	// Custom dispatches.
-	if _, err := reg.Execute(context.Background(), "/custom hi", sess); err != nil {
+	if _, err := reg.Execute(context.Background(), "/custom hi", sess.AsCommandSession()); err != nil {
 		t.Errorf("/custom after built-in register: %v", err)
 	}
 	if cmd.got != "hi" {

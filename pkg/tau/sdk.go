@@ -213,20 +213,29 @@ type PluginManager = plugins.Manager
 // runtime does NOT dispatch commands from the registry itself — embedder
 // UIs hold the same *Registry reference and dispatch in their event loop.
 //
-// tau deviates from the spec by re-using the internal Command interface
-// verbatim. The spec proposed a narrower CommandSession interface so
-// custom commands could not reach the concrete *agent.AgentSession; in
-// practice the built-in commands (checkout, fork, label, ...) need the
-// full session surface (state tree, runtime options) to do their job,
-// so a narrow interface would force a parallel implementation. Embedders
-// who want to constrain command reach should wrap their session in a
-// type that exposes only the methods they permit.
+// See openspec/specs/sdk-public-api/spec.md "Slash command interface".
 
 // Command is the interface every slash command implements. Execute
 // receives the raw argument string (after the command name, whitespace
 // trimmed) and the wired session. The returned string is rendered to the
 // user; a non-nil error surfaces as diagnostic text.
 type Command = slash.Command
+
+// CommandSession is the session surface every Command.Execute receives.
+// It is the public, method-based view over the wired agent session;
+// external Go modules implement tau.Command without importing internal/.
+// The runtime constructs the view via AgentSession.AsCommandSession().
+type CommandSession = agent.CommandSession
+
+// CommandRuntime is the runtime surface exposed through CommandSession.
+// Runtime(). It carries the state manager, options, compactor, and event
+// bus the command operates on.
+type CommandRuntime = agent.CommandRuntime
+
+// CommandOptions is the options surface exposed through CommandRuntime.
+// Options(). Reads (Model, ProviderAPI, ...) are method-based; the
+// SetModel setter is the supported way to mutate the active model.
+type CommandOptions = agent.CommandOptions
 
 // Registry maps slash-command names (with leading slash) to Command
 // implementations. The zero value is not usable; construct via
@@ -341,6 +350,14 @@ type SessionShutdownEvent = agent.SessionShutdownEvent
 // Shutdown has been invoked. The runtime is one-shot: callers must build
 // a new session to serve further turns.
 var ErrRuntimeShutdown = agent.ErrRuntimeShutdown
+
+// ErrMergeStateForeignChild is returned by CommandSession.MergeState when
+// the child argument is not a CommandSession produced by AsCommandSession
+// or Spawn. Plugin authors hit this when they wrap the CommandSession
+// returned by Spawn in their own type before passing it back to
+// MergeState; the wrapper must be removed so MergeState can reach the
+// concrete session underneath. Detect via errors.Is.
+var ErrMergeStateForeignChild = agent.ErrMergeStateForeignChild
 
 // ErrUnknownTool is returned by the tool registry's Lookup when no tool is
 // registered under the requested name. The agent loop catches this and

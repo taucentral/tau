@@ -25,7 +25,7 @@ func (clearCommand) ShortHelp() string {
 	return "Clear the conversational viewport (history is preserved on disk)"
 }
 
-func (clearCommand) Execute(_ context.Context, _ string, session *agent.AgentSession) (string, error) {
+func (clearCommand) Execute(_ context.Context, _ string, session agent.CommandSession) (string, error) {
 	if session == nil {
 		return "", errors.New("/clear: session is nil")
 	}

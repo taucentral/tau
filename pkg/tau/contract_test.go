@@ -497,6 +497,54 @@ func TestContractSlashCommandsInjectedRegistryOverrides(t *testing.T) {
 	}
 }
 
+// TestContractSlashCommandsAcceptCustomCommand proves the public SDK
+// seam accepts a user-defined Command implementation: Register records
+// the custom command and Execute dispatches it. The custom command
+// ignores its CommandSession argument, so the dispatch path is exercised
+// with nil; the end-to-end path with a real session is covered by
+// internal/slash/slash_test.go and by pkg/tau/contract (the external-
+// shaped contract package).
+func TestContractSlashCommandsAcceptCustomCommand(t *testing.T) {
+	reg := NewRegistry()
+	cmd := &contractEchoCommand{name: "/contractecho"}
+	reg.Register(cmd)
+
+	got, ok := reg.Lookup("/contractecho")
+	if !ok {
+		t.Fatal("Registry.Lookup(/contractecho) returned ok=false")
+	}
+	if got.Name() != "/contractecho" {
+		t.Errorf("Lookup Name() = %q, want /contractecho", got.Name())
+	}
+
+	out, err := reg.Execute(context.Background(), "/contractecho hello", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "hello" {
+		t.Errorf("Execute output = %q, want %q", out, "hello")
+	}
+	if cmd.got != "hello" {
+		t.Errorf("custom command args = %q, want %q", cmd.got, "hello")
+	}
+}
+
+// contractEchoCommand is a minimal tau.Command implementation used by
+// TestContractSlashCommandsAcceptCustomCommand. Its purpose is to
+// prove the public SDK accepts an externally-shaped Command value; the
+// body is intentionally trivial.
+type contractEchoCommand struct {
+	name string
+	got  string
+}
+
+func (c *contractEchoCommand) Name() string      { return c.name }
+func (c *contractEchoCommand) ShortHelp() string { return "echo args (contract)" }
+func (c *contractEchoCommand) Execute(_ context.Context, args string, _ CommandSession) (string, error) {
+	c.got = args
+	return args, nil
+}
+
 // --- State -----------------------------------------------------------------
 
 func TestContractStateInMemoryDoesNotTouchDisk(t *testing.T) {

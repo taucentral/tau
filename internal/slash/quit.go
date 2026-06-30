@@ -19,6 +19,6 @@ func newQuitCommand() Command { return quitCommand{} }
 func (quitCommand) Name() string      { return "/quit" }
 func (quitCommand) ShortHelp() string { return "Exit tau" }
 
-func (quitCommand) Execute(_ context.Context, _ string, _ *agent.AgentSession) (string, error) {
+func (quitCommand) Execute(_ context.Context, _ string, _ agent.CommandSession) (string, error) {
 	return "", ErrQuitRequested
 }

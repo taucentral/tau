@@ -23,12 +23,12 @@ func (forkCommand) ShortHelp() string {
 	return "Branch the session at the current leaf, preserving a summary of the abandoned path"
 }
 
-func (forkCommand) Execute(ctx context.Context, args string, session *agent.AgentSession) (string, error) {
+func (forkCommand) Execute(ctx context.Context, args string, session agent.CommandSession) (string, error) {
 	if session == nil {
 		return "", errors.New("/fork: session is nil")
 	}
 	rt := session.Runtime()
-	leafID := rt.State.LeafID()
+	leafID := rt.State().LeafID()
 	if leafID == "" {
 		return "", errors.New("/fork: no entries to fork from (session is empty)")
 	}
@@ -36,18 +36,18 @@ func (forkCommand) Execute(ctx context.Context, args string, session *agent.Agen
 	// Create time, so LeafID is non-empty even on a fresh session. Detect
 	// "empty" by checking the tree length: only the root means nothing
 	// meaningful to fork from.
-	if tree, err := rt.State.Tree(); err == nil && tree.Len() <= 1 {
+	if tree, err := rt.State().Tree(); err == nil && tree.Len() <= 1 {
 		return "", errors.New("/fork: no entries to fork from (session is empty)")
 	}
 
-	newID, err := rt.State.BranchWithSummary(ctx, leafID, summarizerClient(session))
+	newID, err := rt.State().BranchWithSummary(ctx, leafID, summarizerClient(session))
 	if err != nil {
 		// Two known cases:
 		// 1. BranchWithSummary is not wired on this Manager
 		//    (ErrBranchWithSummaryUnsupported). Fall back to plain Branch.
 		// 2. Real failure (LLM error, ctx cancelled). Surface to user.
 		if isUnsupported(err) {
-			if branchErr := rt.State.Branch(leafID); branchErr != nil {
+			if branchErr := rt.State().Branch(leafID); branchErr != nil {
 				return "", fmt.Errorf("/fork: branch fallback: %w", branchErr)
 			}
 			return fmt.Sprintf("forked at %s (no summary; summarizer unavailable)", leafID), nil

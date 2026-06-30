@@ -39,8 +39,13 @@ type Command interface {
 
 	// Execute runs the command. ctx is the agent context; args is the
 	// trimmed argument text after the command name (may be empty);
-	// session is the wired agent session the command operates on.
-	Execute(ctx context.Context, args string, session *agent.AgentSession) (string, error)
+	// session is the CommandSession view over the wired agent session
+	// the command operates on. Internal callers obtain the view via
+	// (*agent.AgentSession).AsCommandSession(); external plugin
+	// commands see only the agent.CommandSession interface (re-exported
+	// by pkg/tau/sdk.go as tau.CommandSession) and never the concrete
+	// *agent.AgentSession, which they cannot name.
+	Execute(ctx context.Context, args string, session agent.CommandSession) (string, error)
 }
 
 // Sentinel errors used to signal side effects outside the slash package
@@ -136,7 +141,7 @@ func Parse(input string) (name, args string, ok bool) {
 // ErrUnknownCommand when input looks like a slash command but the name
 // is not registered. Returns ErrNotASlashCommand when input does not
 // start with "/" (the caller should treat it as ordinary input).
-func (r *Registry) Execute(ctx context.Context, input string, session *agent.AgentSession) (string, error) {
+func (r *Registry) Execute(ctx context.Context, input string, session agent.CommandSession) (string, error) {
 	name, args, ok := Parse(input)
 	if !ok {
 		return "", ErrNotASlashCommand

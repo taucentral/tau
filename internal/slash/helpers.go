@@ -13,11 +13,11 @@ import (
 // to state.Manager.BranchWithSummary. Returns nil when no client is
 // wired — BranchWithSummary then returns ErrBranchWithSummaryUnsupported
 // and the caller can fall back to a plain Branch.
-func summarizerClient(session *agent.AgentSession) llm.LLMClient {
+func summarizerClient(session agent.CommandSession) llm.LLMClient {
 	if session == nil {
 		return nil
 	}
-	return session.Runtime().Options.LLMClient
+	return session.Runtime().Options().LLMClient()
 }
 
 // isUnsupported reports whether err is the ErrBranchWithSummaryUnsupported

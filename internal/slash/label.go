@@ -22,7 +22,7 @@ func newLabelCommand() Command { return labelCommand{} }
 func (labelCommand) Name() string      { return "/label" }
 func (labelCommand) ShortHelp() string { return "Attach a text label to the current leaf" }
 
-func (labelCommand) Execute(_ context.Context, args string, session *agent.AgentSession) (string, error) {
+func (labelCommand) Execute(_ context.Context, args string, session agent.CommandSession) (string, error) {
 	if session == nil {
 		return "", errors.New("/label: session is nil")
 	}
@@ -31,11 +31,11 @@ func (labelCommand) Execute(_ context.Context, args string, session *agent.Agent
 		return "", errors.New("/label: usage: /label <text>")
 	}
 	rt := session.Runtime()
-	if _, err := rt.State.Append(state.Entry{
+	if _, err := rt.State().Append(state.Entry{
 		Kind:    state.KindLabel,
 		Payload: state.LabelPayload{Label: text},
 	}); err != nil {
 		return "", fmt.Errorf("/label: %w", err)
 	}
-	return fmt.Sprintf("labelled leaf %s: %s", rt.State.LeafID(), text), nil
+	return fmt.Sprintf("labelled leaf %s: %s", rt.State().LeafID(), text), nil
 }

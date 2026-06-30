@@ -333,7 +333,7 @@ func (m *AppModel) submitInput() tea.Cmd {
 // Sentinel returns drive UI side effects (clear viewport, show tree,
 // request quit); ordinary output is rendered as a system message.
 func (m *AppModel) handleSlashCommand(input string) tea.Cmd {
-	out, err := m.slashRegistry.Execute(context.Background(), input, m.session)
+	out, err := m.slashRegistry.Execute(context.Background(), input, m.session.AsCommandSession())
 	m.input.Reset()
 	switch {
 	case errors.Is(err, slash.ErrQuitRequested):
