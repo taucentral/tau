@@ -47,9 +47,9 @@ func TestSlashCommandsReturnsBuiltinsByDefault(t *testing.T) {
 
 	got := sess.SlashCommands()
 	// The default registry is constructed by slash.DefaultRegistry, which
-	// registers nine built-ins: clear, checkout, compact, fork, help,
+	// registers ten built-ins: clear, checkout, cls, compact, fork, help,
 	// label, model, quit, tree.
-	want := []string{"clear", "checkout", "compact", "fork", "help", "label", "model", "quit", "tree"}
+	want := []string{"clear", "checkout", "cls", "compact", "fork", "help", "label", "model", "quit", "tree"}
 	sortedGot := append([]string(nil), got...)
 	sort.Strings(sortedGot)
 	sortedWant := append([]string(nil), want...)

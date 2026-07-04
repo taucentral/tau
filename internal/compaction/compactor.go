@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/coevin/tau/internal/llm/tokencounter"
 	"github.com/coevin/tau/internal/state"
@@ -12,6 +13,13 @@ import (
 // Settings.Compaction.ReserveTokens is nil. Matches the compaction spec
 // ("reserveTokens defaults to 8192").
 const DefaultReserveTokens = 8192
+
+// DefaultKeepRecentTokens is the floor on the kept region applied when
+// Settings.Compaction.KeepRecentTokens is nil. Matches pi's
+// keepRecentTokens default at
+// third-party/pi/packages/coding-agent/src/core/settings-manager.ts:771-781
+// and the compaction spec ("keepRecentTokens defaults to 20000").
+const DefaultKeepRecentTokens = 20000
 
 // Result describes the outcome of a MaybeCompact call.
 type Result struct {
@@ -45,19 +53,46 @@ type Result struct {
 type Compactor struct {
 	Counter       tokencounter.TokenCounter
 	ReserveTokens int
+	// keepRecent is the floor on the kept region: FindCutPoint walks
+	// backward from the leaf and returns the closest eligible cut at or
+	// before the position where the BPE-accurate accumulator crosses
+	// keepRecent. Matches pi's keepRecentTokens; see cutpoint.go.
+	keepRecent    int
 	Protection    ProtectionConfig
 	Summarizer    *Summarizer
 }
 
 // NewCompactor returns a Compactor with the standard defaults applied.
-// reserveTokens of zero means DefaultReserveTokens.
-func NewCompactor(counter tokencounter.TokenCounter, summarizer *Summarizer, reserveTokens int) *Compactor {
+//
+// reserveTokens of zero means DefaultReserveTokens. keepRecentTokens of
+// zero means DefaultKeepRecentTokens. keepRecentTokens is clamped to
+// min(keepRecentTokens, contextWindow/2) — a floor exceeding half the
+// context window would let the kept region dominate the budget and push
+// the next turn over the model's hard limit. The clamp prevents a
+// misconfigured KeepRecentTokens (e.g., 500000 set when the field was a
+// no-op) from effectively disabling compaction.
+//
+// contextWindow SHOULD reflect the active model's true budget. Callers
+// MAY pass 0 when they want no clamping (treated as +∞); this is the
+// path used by tests that construct a Compactor without a real model.
+func NewCompactor(counter tokencounter.TokenCounter, summarizer *Summarizer, reserveTokens, keepRecentTokens, contextWindow int) *Compactor {
 	if reserveTokens <= 0 {
 		reserveTokens = DefaultReserveTokens
+	}
+	if keepRecentTokens <= 0 {
+		keepRecentTokens = DefaultKeepRecentTokens
+	}
+	if contextWindow > 0 {
+		half := contextWindow / 2
+		if half > 0 && keepRecentTokens > half {
+			log.Printf("compaction: clamped keepRecentTokens from %d to %d (contextWindow/2)", keepRecentTokens, half)
+			keepRecentTokens = half
+		}
 	}
 	return &Compactor{
 		Counter:       counter,
 		ReserveTokens: reserveTokens,
+		keepRecent:    keepRecentTokens,
 		Protection:    ProtectionConfig{},
 		Summarizer:    summarizer,
 	}
@@ -130,10 +165,16 @@ func (c *Compactor) MaybeCompact(
 	}
 
 	protected := BuildProtectionList(walk, c.Protection)
-	cutIdx := FindCutPoint(walk, protected, c.Counter, model, threshold)
+	// FindCutPoint uses keepRecent as the FLOOR on the kept region (matching
+	// pi's keepRecentTokens), not as a ceiling. The trigger threshold above
+	// already used ReserveTokens to decide whether to compact at all; the
+	// floor is independent of that decision and only governs how much we
+	// keep. See cutpoint.go and design.md D1.1 / D1.4.
+	cutIdx := FindCutPoint(walk, protected, c.Counter, model, c.keepRecent)
 	if cutIdx == NoCutNeeded {
-		// Can happen when protected entries forced the kept region to fit.
-		// Treat as below-threshold.
+		// FindCutPoint never returns NoCutNeeded in the current
+		// implementation (it always picks at least walk[0]); retained
+		// for forward compatibility. Treat as below-threshold.
 		return Result{
 			Reason:               "no eligible cut point",
 			PreCompactionTokens:  totalTokens,

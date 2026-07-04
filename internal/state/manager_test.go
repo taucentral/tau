@@ -643,6 +643,164 @@ func TestBoltManager_BuildContext_BranchSummaryInjected(t *testing.T) {
 	}
 }
 
+// TestBoltManager_BuildContext_ClearMarkerHidesOlderEntries appends a
+// ClearMarker mid-chain and verifies that entries older than the marker
+// do not appear in the assembled context. Only entries appended AFTER
+// the marker (its children) survive.
+func TestBoltManager_BuildContext_ClearMarkerHidesOlderEntries(t *testing.T) {
+	mgr, _ := newBoltManager(t)
+	appendMessage(t, mgr, llm.RoleUser, "pre-clear user")
+	appendMessage(t, mgr, llm.RoleAssistant, "pre-clear assistant")
+	// Append the ClearMarker; this becomes the new leaf.
+	if _, err := mgr.Append(Entry{
+		Kind:    KindClearMarker,
+		Payload: ClearMarkerPayload{},
+	}); err != nil {
+		t.Fatalf("Append ClearMarker: %v", err)
+	}
+	appendMessage(t, mgr, llm.RoleUser, "post-clear user")
+	appendMessage(t, mgr, llm.RoleAssistant, "post-clear assistant")
+
+	ctx, err := mgr.BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("BuildContext: %v", err)
+	}
+	if len(ctx.Messages) != 2 {
+		t.Fatalf("Messages len = %d, want 2 (post-clear user + post-clear assistant)", len(ctx.Messages))
+	}
+	for _, m := range ctx.Messages {
+		for _, b := range m.Content {
+			if tc, ok := b.(llm.TextContent); ok {
+				if strings.Contains(tc.Text, "pre-clear") {
+					t.Errorf("pre-clear text leaked past ClearMarker: %q", tc.Text)
+				}
+			}
+		}
+	}
+}
+
+// TestBoltManager_BuildContext_ClearMarkerAtLeafYieldsEmptyContext verifies
+// the degenerate case: when the leaf IS a ClearMarker (no children yet),
+// BuildContext returns no messages. The model starts with a blank slate.
+func TestBoltManager_BuildContext_ClearMarkerAtLeafYieldsEmptyContext(t *testing.T) {
+	mgr, _ := newBoltManager(t)
+	appendMessage(t, mgr, llm.RoleUser, "everything before clear")
+	appendMessage(t, mgr, llm.RoleAssistant, "should be hidden")
+	if _, err := mgr.Append(Entry{
+		Kind:    KindClearMarker,
+		Payload: ClearMarkerPayload{},
+	}); err != nil {
+		t.Fatalf("Append ClearMarker: %v", err)
+	}
+
+	ctx, err := mgr.BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("BuildContext: %v", err)
+	}
+	if len(ctx.Messages) != 0 {
+		t.Errorf("Messages len = %d, want 0 (ClearMarker is leaf; nothing newer)", len(ctx.Messages))
+	}
+}
+
+// TestBoltManager_BuildContext_ClearMarkerOverridesOlderCompaction verifies
+// the cutoff composition: when a ClearMarker appears in the walk, any
+// Compaction entry older than it is invisible. Only the marker cutoff
+// applies. The Compaction summary MUST NOT be injected.
+func TestBoltManager_BuildContext_ClearMarkerOverridesOlderCompaction(t *testing.T) {
+	mgr, _ := newBoltManager(t)
+	appendMessage(t, mgr, llm.RoleUser, "ancient user")
+	// Compaction entry — older than the ClearMarker we'll append next.
+	if _, err := mgr.Append(Entry{
+		Kind: KindCompaction,
+		Payload: CompactionPayload{
+			Summary:          "summary of ancient material",
+			FirstKeptEntryID: "", // not relevant; the marker hides the whole compaction
+		},
+	}); err != nil {
+		t.Fatalf("Append Compaction: %v", err)
+	}
+	// ClearMarker hides everything older — including the Compaction.
+	if _, err := mgr.Append(Entry{
+		Kind:    KindClearMarker,
+		Payload: ClearMarkerPayload{},
+	}); err != nil {
+		t.Fatalf("Append ClearMarker: %v", err)
+	}
+	appendMessage(t, mgr, llm.RoleUser, "fresh user")
+
+	ctx, err := mgr.BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("BuildContext: %v", err)
+	}
+	if len(ctx.Messages) != 1 {
+		t.Fatalf("Messages len = %d, want 1 (only fresh user)", len(ctx.Messages))
+	}
+	tc0, _ := ctx.Messages[0].Content[0].(llm.TextContent)
+	if tc0.Text != "fresh user" {
+		t.Errorf("Messages[0] = %q, want %q", tc0.Text, "fresh user")
+	}
+	// Defensive: scan for the compaction summary text just in case.
+	for _, m := range ctx.Messages {
+		for _, b := range m.Content {
+			if tc, ok := b.(llm.TextContent); ok {
+				if strings.Contains(tc.Text, "summary of ancient material") {
+					t.Errorf("Compaction summary leaked past ClearMarker: %q", tc.Text)
+				}
+			}
+		}
+	}
+}
+
+// TestBoltManager_BuildContext_ClearMarkerRecoverableViaSetLeaf verifies
+// the recovery invariant: SetLeaf(oldLeaf) walks from the pre-clear leaf
+// and never reaches the ClearMarker (it's a descendant, not an ancestor).
+// The original context is fully restored.
+func TestBoltManager_BuildContext_ClearMarkerRecoverableViaSetLeaf(t *testing.T) {
+	mgr, _ := newBoltManager(t)
+	appendMessage(t, mgr, llm.RoleUser, "kept user 1")
+	appendMessage(t, mgr, llm.RoleAssistant, "kept assistant 1")
+	oldLeaf := mgr.LeafID()
+	// Append the ClearMarker; leaf advances.
+	if _, err := mgr.Append(Entry{
+		Kind:    KindClearMarker,
+		Payload: ClearMarkerPayload{},
+	}); err != nil {
+		t.Fatalf("Append ClearMarker: %v", err)
+	}
+	appendMessage(t, mgr, llm.RoleUser, "post-clear user")
+
+	// Sanity: post-clear context hides the old messages.
+	postCtx, err := mgr.BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("post-clear BuildContext: %v", err)
+	}
+	if len(postCtx.Messages) != 1 {
+		t.Fatalf("post-clear Messages len = %d, want 1", len(postCtx.Messages))
+	}
+
+	// Recovery: SetLeaf back to the pre-clear leaf and verify original
+	// context is restored.
+	if err := mgr.SetLeaf(oldLeaf); err != nil {
+		t.Fatalf("SetLeaf(oldLeaf): %v", err)
+	}
+	recovered, err := mgr.BuildContext(context.Background())
+	if err != nil {
+		t.Fatalf("recovered BuildContext: %v", err)
+	}
+	if len(recovered.Messages) != 2 {
+		t.Errorf("recovered Messages len = %d, want 2 (kept user 1 + kept assistant 1)", len(recovered.Messages))
+	}
+	for _, m := range recovered.Messages {
+		for _, b := range m.Content {
+			if tc, ok := b.(llm.TextContent); ok {
+				if strings.Contains(tc.Text, "post-clear") {
+					t.Errorf("post-clear text leaked into recovered context: %q", tc.Text)
+				}
+			}
+		}
+	}
+}
+
 func TestBoltManager_BuildContext_ToolPairIntegrity(t *testing.T) {
 	mgr, _ := newBoltManager(t)
 	// Build a chain with a ToolUse in the assistant turn and the

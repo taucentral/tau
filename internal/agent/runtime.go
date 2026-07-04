@@ -197,7 +197,14 @@ func CreateAgentSessionRuntime(ctx context.Context, cwd string, opts SessionOpti
 	if r.Settings.Compaction != nil && r.Settings.Compaction.ReserveTokens != nil {
 		reserve = *r.Settings.Compaction.ReserveTokens
 	}
-	compactor := compaction.NewCompactor(counter, summarizer, reserve)
+	keepRecent := 0
+	if r.Settings.Compaction != nil && r.Settings.Compaction.KeepRecentTokens != nil {
+		keepRecent = *r.Settings.Compaction.KeepRecentTokens
+	}
+	// r.ContextWindow is the model's budget (resolvedOptions embeds the
+	// caller's ContextWindow at options.go:192). Passing it through lets
+	// NewCompactor clamp an oversized keepRecent to contextWindow/2.
+	compactor := compaction.NewCompactor(counter, summarizer, reserve, keepRecent, r.ContextWindow)
 
 	// Tool registry: built-ins first, plugin tools layered on top.
 	// Plugin/built-in collisions are first-wins and reported via the bus
@@ -222,8 +229,22 @@ func CreateAgentSessionRuntime(ctx context.Context, cwd string, opts SessionOpti
 	}
 
 	// Prompts assembler + template loader. Both are immutable after
-	// construction; safe for concurrent use.
-	assembler := prompts.NewAssembler(configDir, cwd)
+	// construction; safe for concurrent use. The assembler adopts the
+	// walk knobs from Settings.Prompts so users can configure the
+	// ancestor-walk behavior via settings.json.
+	var walkOpts prompts.WalkOpts
+	if r.Settings.Prompts != nil {
+		if r.Settings.Prompts.WalkToRoot != nil {
+			walkOpts.WalkToRoot = *r.Settings.Prompts.WalkToRoot
+		}
+		if r.Settings.Prompts.MaxAncestorDepth != nil {
+			walkOpts.MaxAncestorDepth = *r.Settings.Prompts.MaxAncestorDepth
+		}
+		if r.Settings.Prompts.StopDir != nil {
+			walkOpts.StopDir = *r.Settings.Prompts.StopDir
+		}
+	}
+	assembler := prompts.NewAssemblerWithWalk(configDir, cwd, walkOpts)
 	templateLoader := prompts.NewLoader(configDir, cwd)
 
 	// Per-session file mutation queue.

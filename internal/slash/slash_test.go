@@ -111,7 +111,7 @@ func TestRegistry_RegisterAndLookup(t *testing.T) {
 func TestRegistry_Names(t *testing.T) {
 	r := DefaultRegistry()
 	names := r.Names()
-	want := []string{"/checkout", "/clear", "/compact", "/fork", "/help", "/label", "/model", "/quit", "/tree"}
+	want := []string{"/checkout", "/clear", "/cls", "/compact", "/fork", "/help", "/label", "/model", "/quit", "/tree"}
 	if len(names) != len(want) {
 		t.Fatalf("Names count = %d, want %d (%v)", len(names), len(want), names)
 	}
@@ -150,9 +150,30 @@ func TestQuitCommand(t *testing.T) {
 
 func TestClearCommand(t *testing.T) {
 	r := DefaultRegistry()
-	_, err := r.Execute(context.Background(), "/clear", newTestSession(t).AsCommandSession())
-	if !errors.Is(err, ErrClearViewport) {
-		t.Errorf("/clear: err = %v, want ErrClearViewport", err)
+	sess := newTestSession(t)
+	_, err := r.Execute(context.Background(), "/clear", sess.AsCommandSession())
+	if !errors.Is(err, ErrContextReset) {
+		t.Errorf("/clear: err = %v, want ErrContextReset", err)
+	}
+}
+
+func TestClsCommand(t *testing.T) {
+	r := DefaultRegistry()
+	_, err := r.Execute(context.Background(), "/cls", newTestSession(t).AsCommandSession())
+	if !errors.Is(err, ErrClearScreen) {
+		t.Errorf("/cls: err = %v, want ErrClearScreen", err)
+	}
+}
+
+// TestClearViewportAliasCompatibility verifies that the deprecated
+// ErrClearViewport alias still matches the same error value as
+// ErrClearScreen, so any caller matching on the old name keeps working.
+func TestClearViewportAliasCompatibility(t *testing.T) {
+	if !errors.Is(ErrClearScreen, ErrClearViewport) {
+		t.Error("errors.Is(ErrClearScreen, ErrClearViewport) = false; alias broken")
+	}
+	if !errors.Is(ErrClearViewport, ErrClearScreen) {
+		t.Error("errors.Is(ErrClearViewport, ErrClearScreen) = false; alias broken")
 	}
 }
 
@@ -414,10 +435,11 @@ func TestHelpCommand_ListsAllCommands(t *testing.T) {
 func TestCommands_RejectNilSession(t *testing.T) {
 	r := DefaultRegistry()
 	for _, name := range r.Names() {
-		// /quit, /clear, /tree, and /help do not require a session —
+		// /quit, /cls, /tree, and /help do not require a session —
 		// they return immediately or only consult the registry.
+		// /clear DOES require a session now (it appends a ClearMarker).
 		switch name {
-		case "/quit", "/clear", "/tree", "/help":
+		case "/quit", "/cls", "/tree", "/help":
 			continue
 		}
 		t.Run(name, func(t *testing.T) {

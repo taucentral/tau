@@ -31,6 +31,7 @@ import (
 	"github.com/coevin/tau/internal/llm"
 	"github.com/coevin/tau/internal/llm/provider/anthropic"
 	"github.com/coevin/tau/internal/llm/provider/openai"
+	"github.com/coevin/tau/internal/state"
 	"github.com/coevin/tau/internal/tools"
 )
 
@@ -60,11 +61,29 @@ type wiredSession struct {
 //   - Wraps the runtime in an AgentSession.
 //
 // Returns ErrNoModel when no model is configured. Returns provider-specific
-// errors when auth resolution fails for non-faux models.
-func wireSession(ctx context.Context, args Args) (*wiredSession, error) {
+// errors when auth resolution fails for non-faux models. Returns
+// ErrNoRecentSession / ErrSessionNotFound / ErrForkWithoutSource from the
+// resolveStateManager helper when session-resume flags cannot be resolved.
+//
+// The returned cleanup func MUST be deferred by the caller even when it is
+// a no-op: when resolveStateManager injects a caller-owned state.Manager,
+// the runtime adopts it without ownership (ownsState=false, no Close on
+// Shutdown). cleanup closes that injected manager. nil cleanup on error
+// return means there is nothing for the caller to clean.
+func wireSession(ctx context.Context, args Args) (*wiredSession, func(), error) {
 	cwd, err := resolveCwd(args)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	// Resolve session-resume flags (--continue, --resume, --session,
+	// --fork, --no-session) into an injected state.Manager (or nil for
+	// "let the runtime create fresh"). When a manager is injected the
+	// runtime adopts it without ownership — the cleanup closure returned
+	// here closes it. See resolveStateManager for the deviation notes.
+	mgr, sessionID, err := resolveStateManager(args, cwd)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Load Settings (global + project when trusted). Trust decisions are
@@ -74,18 +93,27 @@ func wireSession(ctx context.Context, args Args) (*wiredSession, error) {
 	// (per spec D2.1) layers on top later.
 	settings, err := loadEffectiveSettings(ctx, cwd)
 	if err != nil {
-		return nil, err
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+		return nil, nil, err
 	}
 
 	modelID := resolveModel(args, settings)
 	if modelID == "" {
-		return nil, ErrNoModel
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+		return nil, nil, ErrNoModel
 	}
 
 	// Load the user's models.json (may be empty / missing).
 	modelsFile, err := loadModelsFile()
 	if err != nil {
-		return nil, err
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+		return nil, nil, err
 	}
 
 	// Build the LLM client.
@@ -98,7 +126,10 @@ func wireSession(ctx context.Context, args Args) (*wiredSession, error) {
 	} else {
 		c, api, err := buildRealClient(args, settings, modelsFile, modelID)
 		if err != nil {
-			return nil, err
+			if mgr != nil {
+				_ = mgr.Close()
+			}
+			return nil, nil, err
 		}
 		client = c
 		providerAPI = api
@@ -123,6 +154,8 @@ func wireSession(ctx context.Context, args Args) (*wiredSession, error) {
 		ContextWindow: contextWindow,
 		KnownModels:   modelsFile.AllKnownModels(),
 		ProviderAPI:   providerAPI,
+		StateManager:  mgr, // nil OK: runtime creates a fresh owned session.
+		SessionID:     sessionID,
 	}
 	if args.Thinking != "" {
 		opts.ThinkingLevel = config.ThinkingLevel(args.Thinking)
@@ -130,12 +163,186 @@ func wireSession(ctx context.Context, args Args) (*wiredSession, error) {
 
 	rt, err := agent.CreateAgentSessionRuntime(ctx, cwd, opts)
 	if err != nil {
-		return nil, err
+		// We own mgr (runtime did not adopt it). Close is idempotent per
+		// manager.go:127 — safe even if a future runtime change adopts
+		// the manager partway through CreateAgentSessionRuntime.
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+		return nil, nil, err
 	}
+
+	// Build the cleanup closure. When mgr is nil, cleanup is a no-op so
+	// callers can `defer cleanup()` unconditionally. Capturing mgr into a
+	// local here keeps the closure's lifetime independent of later mutations
+	// to the variable (there are none today, but it's the right shape).
+	cleanup := func() {}
+	if mgr != nil {
+		m := mgr
+		cleanup = func() { _ = m.Close() }
+	}
+
 	return &wiredSession{
 		Session: agent.NewAgentSession(rt),
 		Runtime: rt,
-	}, nil
+	}, cleanup, nil
+}
+
+// resolveStateManager resolves session-resume flags into an injected
+// state.Manager (or nil for "let the runtime create fresh"). Returns
+// (mgr, sessionID, err). sessionID is the resolved leaf entry ID, advisory
+// for opts.SessionID; empty for fresh-session and for --no-session.
+//
+// Resolution order (design.md D2):
+//
+//  1. --no-session wins; everything else ignored. Returns an in-memory
+//     manager whose data never touches disk.
+//  2. At most one source flag (--continue, --resume, --session);
+//     multiple → usage error (NOT a typed sentinel).
+//  3. --fork requires one of the source flags.
+//
+// tau deviates from design.md D3 in two ways:
+//
+//   - state.OpenManager calls bbolt.Open which CREATES missing files, so
+//     we os.Stat first and translate os.IsNotExist to ErrSessionNotFound.
+//     Without this check, --resume <bogus> would silently create an empty
+//     session file — the worst possible failure mode.
+//   - The design referenced free functions state.DefaultSessionsDir,
+//     state.ContinueRecent, and state.InMemory that do not exist in the
+//     landed code. We use the real primitives: state.ListSessions (added
+//     for this change), state.OpenManager, state.NewInMemoryManager, and
+//     config.SessionsDir.
+//
+// tau deviates from design.md D4: Manager.SourcePath() is NOT added to
+// the interface (the pkg/tau/sdk.go:284 type alias makes any interface-
+// method addition an SDK-breaking change). The source path is re-derived
+// here from args + cwd.
+//
+// Sentinel error wrapping discipline: ErrNoRecentSession,
+// ErrSessionNotFound, and ErrForkWithoutSource are returned naked (no
+// %w) so errors.Is matches without unwrap chains. All other errors wrap
+// their cause.
+func resolveStateManager(args Args, cwd string) (state.Manager, string, error) {
+	if args.NoSession {
+		return state.NewInMemoryManager(cwd), "", nil
+	}
+
+	sources := 0
+	if args.Continue {
+		sources++
+	}
+	if args.Resume != "" {
+		sources++
+	}
+	if args.Session != "" {
+		sources++
+	}
+	if sources > 1 {
+		return nil, "", fmt.Errorf("cli: at most one of --continue, --resume, --session may be set (got %d); pick one", sources)
+	}
+
+	if args.Fork && sources == 0 {
+		return nil, "", ErrForkWithoutSource
+	}
+
+	var (
+		mgr        state.Manager
+		sourcePath string
+		sessionID  string
+	)
+
+	switch {
+	case args.Continue:
+		sessions, err := state.ListSessions(cwd)
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: list sessions for --continue: %w", err)
+		}
+		if len(sessions) == 0 {
+			return nil, "", ErrNoRecentSession
+		}
+		sourcePath = sessions[0].Path
+		mgr, err = state.OpenManager(sourcePath, cwd)
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: open recent session %s: %w", sourcePath, err)
+		}
+		sessionID = mgr.LeafID()
+
+	case args.Resume != "":
+		sessionsDir, err := config.SessionsDir(cwd)
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: resolve sessions dir: %w", err)
+		}
+		sourcePath = filepath.Join(sessionsDir, args.Resume)
+		if _, err := os.Stat(sourcePath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, "", ErrSessionNotFound
+			}
+			return nil, "", fmt.Errorf("cli: stat session %s: %w", sourcePath, err)
+		}
+		mgr, err = state.OpenManager(sourcePath, cwd)
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: open resumed session %s: %w", sourcePath, err)
+		}
+		sessionID = mgr.LeafID()
+
+	case args.Session != "":
+		sourcePath = args.Session
+		if _, err := os.Stat(sourcePath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, "", ErrSessionNotFound
+			}
+			return nil, "", fmt.Errorf("cli: stat session %s: %w", sourcePath, err)
+		}
+		var err error
+		mgr, err = state.OpenManager(sourcePath, cwd)
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: open session %s: %w", sourcePath, err)
+		}
+		sessionID = mgr.LeafID()
+
+	default:
+		// Fresh session; let the runtime create. (--fork alone already
+		// errored above.)
+		return nil, "", nil
+	}
+
+	if args.Fork {
+		// Forking needs a destination manager whose backing file is NOT
+		// sourcePath (otherwise ForkFrom's internal bbolt.Open on sourcePath
+		// deadlocks against our own handle — bbolt file locks are process-wide
+		// and openTimeout is 5s per store_bbolt.go:33). Create a fresh
+		// destination session under cwd, close the source handle so its
+		// lock is released, then call ForkFrom on the destination.
+		//
+		// This mirrors the existing pattern at
+		// internal/state/manager_test.go:451-475: src.Close() happens
+		// BEFORE dst.ForkFrom(srcPath). The naive shape
+		// `mgr.ForkFrom(sourcePath)` while mgr still holds sourcePath is
+		// a bug.
+		if err := mgr.Close(); err != nil {
+			return nil, "", fmt.Errorf("cli: close source before fork: %w", err)
+		}
+		dst, err := state.CreateManager(cwd, state.SessionHeaderPayload{
+			Cwd:           cwd,
+			Model:         "", // forked sessions don't pin a model at header time
+			ParentSession: sourcePath,
+		})
+		if err != nil {
+			return nil, "", fmt.Errorf("cli: create fork destination: %w", err)
+		}
+		forked, err := dst.ForkFrom(sourcePath)
+		if err != nil {
+			_ = dst.Close()
+			return nil, "", fmt.Errorf("cli: fork from %s: %w", sourcePath, err)
+		}
+		// dst and forked share the same new .bolt file; closing dst would
+		// close forked's backing store. Return forked; the caller owns it
+		// and will close it via the wireSession cleanup closure.
+		_ = dst.Close()
+		return forked, forked.LeafID(), nil
+	}
+
+	return mgr, sessionID, nil
 }
 
 // resolveCwd returns args.Cwd when non-empty, otherwise os.Getwd.
@@ -471,3 +678,21 @@ var ErrNoModel = errors.New("no model configured")
 // ErrNoCredentials is returned when the provider auth chain failed. The
 // underlying error message identifies which step the chain exhausted.
 var ErrNoCredentials = errors.New("no API credentials")
+
+// ErrNoRecentSession is returned by resolveStateManager when --continue is
+// set but no prior session exists under cwd. The runtime falls back to a
+// fresh session when the CLI surfaces this to the user; programmatic
+// callers may handle it via errors.Is.
+var ErrNoRecentSession = errors.New("no recent session to continue")
+
+// ErrSessionNotFound is returned by resolveStateManager when --resume <id>
+// or --session <path> targets a path that does not exist on disk. tau
+// deviates from a naive state.OpenManager call because bbolt.Open creates
+// missing files — without this stat-first check, --resume <bogus-id>
+// would silently create an empty session file.
+var ErrSessionNotFound = errors.New("session not found")
+
+// ErrForkWithoutSource is returned by resolveStateManager when --fork is
+// set without one of --continue / --resume / --session. Forking requires
+// a source session to branch from.
+var ErrForkWithoutSource = errors.New("--fork requires one of --continue, --resume, or --session")

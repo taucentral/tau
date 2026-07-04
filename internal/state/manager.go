@@ -244,3 +244,16 @@ func sessionsDirFor(cwd string) (string, error) {
 	}
 	return dir, nil
 }
+
+// ListSessions returns SessionInfo for every session recorded under cwd,
+// newest-first by mtime. Returns nil (not an error) when no sessions exist.
+//
+// This free function wraps the receiver-less form of (*boltManager).List so
+// callers in the cli package can discover prior sessions without instantiating
+// unexported types. Mirrors the existing pattern at lazy.go:345-347 where
+// ContinueRecent is invoked via (&boltManager{cwd: cwd}).ContinueRecent(cwd).
+//
+// The Manager interface is unchanged; this is a standalone helper.
+func ListSessions(cwd string) ([]SessionInfo, error) {
+	return (&boltManager{cwd: cwd}).List(cwd)
+}

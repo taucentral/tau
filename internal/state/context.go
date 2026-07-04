@@ -26,19 +26,23 @@ func buildContext(s *Store, leafID string) (Context, error) {
 // buildContextFromTree implements the state-tree spec "BuildContext walk":
 //
 //  1. Walk leaf → root via Tree.WalkFromLeaf.
-//  2. If a Compaction entry is encountered, keep entries from leaf down
+//  2. ClearMarker cutoff: if a ClearMarker entry is encountered, truncate
+//     the walk to entries newer than it. The marker is a hard barrier;
+//     nothing older survives. (selectKept applies this before any other
+//     cutoff.)
+//  3. If a Compaction entry is encountered, keep entries from leaf down
 //     to and including FirstKeptEntryID; drop everything older. The
 //     Compaction entry itself contributes its Summary as a synthetic user
 //     message and is NOT included as itself.
-//  3. BranchSummary entries are stripped from the output and their Summary
+//  4. BranchSummary entries are stripped from the output and their Summary
 //     text injected as synthetic user messages.
-//  4. SessionHeader, ThinkingLevelChange, ModelChange, Label, SessionInfo,
+//  5. SessionHeader, ThinkingLevelChange, ModelChange, Label, SessionInfo,
 //     and Custom kinds are skipped (not part of LLM context).
-//  5. Message and CustomMessage entries convert to llm.Message.
-//  6. The result is reversed to root → leaf order.
-//  7. Synthetic messages (compaction summary, then branch summaries) are
+//  6. Message and CustomMessage entries convert to llm.Message.
+//  7. The result is reversed to root → leaf order.
+//  8. Synthetic messages (compaction summary, then branch summaries) are
 //     prepended so the LLM sees them first.
-//  8. Pair integrity: if any ToolResult block in the kept region
+//  9. Pair integrity: if any ToolResult block in the kept region
 //     references a ToolUse that is NOT in the kept region, the walk
 //     extends backward to include the matching ToolUse's assistant
 //     message (state-tree spec scenario "Never split user/tool pairs").
@@ -64,12 +68,34 @@ func buildContextFromTree(tree *Tree, leafID string) (Context, error) {
 	return Context{Messages: msgs}, nil
 }
 
-// selectKept applies the compaction cutoff and pair-integrity rule to the
-// leaf → root walk. Returns:
+// selectKept applies the ClearMarker cutoff, compaction cutoff, and
+// pair-integrity rule to the leaf → root walk. Returns:
 //   - kept: the entries to include (leaf → root order, NOT reversed)
 //   - compactionSummary: text for the synthetic message, "" if no compaction
 //   - branchSummaries: collected BranchSummary text (in leaf→root order)
+//
+// Cutoff order:
+//  1. ClearMarker (hard barrier; nothing older survives).
+//  2. Compaction (kept region is leaf..FirstKeptEntryID).
+//  3. Pair integrity extends kept backward for orphaned ToolResults.
 func selectKept(walk []Entry) (kept []Entry, compactionSummary string, branchSummaries []string, err error) {
+	// ClearMarker cutoff: hard barrier. The marker is appended by /clear
+	// as a child of the then-current leaf. When walking leaf→root, the
+	// first ClearMarker encountered (if any) is the most-recent one;
+	// entries older than it are invisible to the model. Truncating walk
+	// here means the rest of the function (Compaction scan, BranchSummary
+	// strip, extendForToolPairs) operates on the post-clear slice.
+	clearMarkerIdx := -1
+	for i, e := range walk {
+		if e.Kind == KindClearMarker {
+			clearMarkerIdx = i
+			break
+		}
+	}
+	if clearMarkerIdx >= 0 {
+		walk = walk[:clearMarkerIdx]
+	}
+
 	// Locate the most-recent compaction entry in the walk.
 	compactionIdx := -1
 	var compactionPayload CompactionPayload
@@ -256,7 +282,7 @@ func entriesToMessages(entries []Entry) []llm.Message {
 			})
 		case KindSessionHeader, KindCompaction, KindBranchSummary,
 			KindThinkingLevelChange, KindModelChange, KindLabel,
-			KindSessionInfo, KindCustom:
+			KindSessionInfo, KindCustom, KindClearMarker:
 			// Skip: non-conversational kinds (already stripped by the caller
 			// in normal flow; this branch is a defensive measure).
 		default:

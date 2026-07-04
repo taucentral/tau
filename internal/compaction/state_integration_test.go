@@ -37,7 +37,7 @@ func TestIntegration_ArchivedEntriesStillVisibleInTree(t *testing.T) {
 		llm.TextDelta{Text: "## Goal\nx"},
 		llm.Final{},
 	}}
-	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0)
+	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0, 0, 0)
 	if _, err := c.MaybeCompact(context.Background(), mgr, "test-model", 50); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
 	}
@@ -83,7 +83,10 @@ func TestIntegration_ReBranchPastCompaction(t *testing.T) {
 		llm.TextDelta{Text: "## Goal\nx"},
 		llm.Final{},
 	}}
-	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0)
+	// Floor = 50 forces the cut to u4 (leaf), archiving u3, u2, marker, header.
+	// With default floor (20000) the cut would be the oldest eligible (marker),
+	// leaving the marker in context — defeating the test's purpose.
+	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0, 50, 0)
 	res, err := c.MaybeCompact(context.Background(), mgr, "test-model", 50)
 	if err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -229,7 +232,7 @@ func TestIntegration_FileReadsSurviveCompaction(t *testing.T) {
 		llm.TextDelta{Text: "## Goal\nread files"},
 		llm.Final{},
 	}}
-	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0)
+	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0, 0, 0)
 	res, err := c.MaybeCompact(context.Background(), mgr, "test-model", 50)
 	if err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
@@ -284,7 +287,7 @@ func TestIntegration_CompactionThenSummarizeChain(t *testing.T) {
 		llm.TextDelta{Text: "## Goal\nfirst"},
 		llm.Final{},
 	}}
-	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0)
+	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0, 0, 0)
 
 	if _, err := c.MaybeCompact(context.Background(), mgr, "test-model", 50); err != nil {
 		t.Fatalf("first MaybeCompact: %v", err)
@@ -343,7 +346,7 @@ func TestIntegration_CompactionPreservesToolPairIntegrity(t *testing.T) {
 		llm.TextDelta{Text: "## Goal\nx"},
 		llm.Final{},
 	}}
-	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0)
+	c := NewCompactor(detCounter{charsPerToken: 1}, NewSummarizer(fc, "test-model"), 0, 0, 0)
 	if _, err := c.MaybeCompact(context.Background(), mgr, "test-model", 50); err != nil {
 		t.Fatalf("MaybeCompact: %v", err)
 	}

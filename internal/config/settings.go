@@ -67,6 +67,24 @@ type CompactionSettings struct {
 	KeepRecentTokens *int  `json:"keepRecentTokens,omitempty"`
 }
 
+// PromptsSettings configures the system-prompt Assembler's ancestor
+// walk. All fields are optional; nil means "use the zero-value default"
+// which preserves the pre-walk behavior for projects whose cwd is the
+// repo root.
+//
+// Fields:
+//   - WalkToRoot (default false): when true, ignore VCS markers and
+//     walk all the way to the filesystem root.
+//   - MaxAncestorDepth (default 0 = unlimited): cap on ancestor
+//     directories visited. 1 reads only cwd and cwd/...
+//   - StopDir (default ""): explicit stop directory. When set,
+//     overrides both the marker scan and WalkToRoot.
+type PromptsSettings struct {
+	WalkToRoot       *bool   `json:"walkToRoot,omitempty"`
+	MaxAncestorDepth *int    `json:"maxAncestorDepth,omitempty"`
+	StopDir          *string `json:"stopDir,omitempty"`
+}
+
 // BranchSummarySettings controls the branch-summary prompt.
 type BranchSummarySettings struct {
 	ReserveTokens *int  `json:"reserveTokens,omitempty"`
@@ -150,7 +168,7 @@ type Settings struct {
 	Packages                  []any                    `json:"packages,omitempty"`
 	Extensions                []string                 `json:"extensions,omitempty"`
 	Skills                    []string                 `json:"skills,omitempty"`
-	Prompts                   []string                 `json:"prompts,omitempty"`
+	Prompts                   *PromptsSettings         `json:"prompts,omitempty"`
 	Themes                    []string                 `json:"themes,omitempty"`
 	EnableSkillCommands       *bool                    `json:"enableSkillCommands,omitempty"`
 	Terminal                  *TerminalSettings        `json:"terminal,omitempty"`

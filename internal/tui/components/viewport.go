@@ -112,6 +112,16 @@ func (v *Viewport) AutoScroll() bool {
 	return v.autoScroll
 }
 
+// ResetScroll snaps the viewport to the top-left origin and re-enables
+// auto-scroll. Used by /clear's ErrContextReset handler so the user
+// sees a clean slate with the scroll position matching the cleared
+// content. Without this, the scroll offset would refer to entries that
+// no longer exist, producing visual artifacts.
+func (v *Viewport) ResetScroll() {
+	v.vp.GotoTop()
+	v.autoScroll = true
+}
+
 // ScrollUp moves the viewport up by one page.
 func (v *Viewport) ScrollUp() {
 	v.vp.ScrollUp(v.height)

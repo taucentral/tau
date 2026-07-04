@@ -169,3 +169,60 @@ func TestSettings_EmptyHasNoOptionalFields(t *testing.T) {
 		t.Errorf("empty Settings should have no keys: %s", got)
 	}
 }
+
+// TestPromptsSettings_DefaultsAreZero confirms that an unset
+// PromptsSettings behaves identically to an explicit zero-valued
+// one. This is the acceptance test for task 3.2: "WalkToRoot=false,
+// MaxAncestorDepth=0 (unlimited), StopDir='' are the defaults".
+//
+// The runtime translates nil pointer fields to zero-value WalkOpts,
+// so a nil *PromptsSettings and an &PromptsSettings{} must produce
+// the same walk behavior. We check this via JSON round-trip: the
+// empty struct marshals to "{}" and a DefaultSettings() has nil
+// Prompts.
+func TestPromptsSettings_DefaultsAreZero(t *testing.T) {
+	// DefaultSettings should leave Prompts nil (nil == zero for
+	// pointer-to-struct with all-zero fields).
+	def := DefaultSettings()
+	if def.Prompts != nil {
+		t.Errorf("DefaultSettings().Prompts = %+v, want nil (nil == zero-value defaults)", def.Prompts)
+	}
+
+	// An explicit zero PromptsSettings should marshal to "{}" —
+	// all fields are omitempty pointers.
+	empty := &PromptsSettings{}
+	data, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != "{}" {
+		t.Errorf("zero PromptsSettings marshals to %s, want {}", string(data))
+	}
+
+	// A populated PromptsSettings should round-trip all three fields.
+	walk := true
+	depth := 2
+	stop := "/tmp/stop"
+	populated := &PromptsSettings{
+		WalkToRoot:       &walk,
+		MaxAncestorDepth: &depth,
+		StopDir:          &stop,
+	}
+	data, err = json.Marshal(populated)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var back PromptsSettings
+	if err := strictJSONDecode(data, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back.WalkToRoot == nil || *back.WalkToRoot != walk {
+		t.Errorf("WalkToRoot did not round-trip: got %+v", back.WalkToRoot)
+	}
+	if back.MaxAncestorDepth == nil || *back.MaxAncestorDepth != depth {
+		t.Errorf("MaxAncestorDepth did not round-trip: got %+v", back.MaxAncestorDepth)
+	}
+	if back.StopDir == nil || *back.StopDir != stop {
+		t.Errorf("StopDir did not round-trip: got %+v", back.StopDir)
+	}
+}

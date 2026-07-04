@@ -330,8 +330,8 @@ func (m *AppModel) submitInput() tea.Cmd {
 }
 
 // handleSlashCommand dispatches a slash command via the registry.
-// Sentinel returns drive UI side effects (clear viewport, show tree,
-// request quit); ordinary output is rendered as a system message.
+// Sentinel returns drive UI side effects (clear viewport, reset context,
+// show tree, request quit); ordinary output is rendered as a system message.
 func (m *AppModel) handleSlashCommand(input string) tea.Cmd {
 	out, err := m.slashRegistry.Execute(context.Background(), input, m.session.AsCommandSession())
 	m.input.Reset()
@@ -339,7 +339,20 @@ func (m *AppModel) handleSlashCommand(input string) tea.Cmd {
 	case errors.Is(err, slash.ErrQuitRequested):
 		m.requestQuit()
 		return tea.Quit
-	case errors.Is(err, slash.ErrClearViewport):
+	case errors.Is(err, slash.ErrContextReset):
+		// /clear returns BOTH a success message and ErrContextReset.
+		// Clear first, THEN render the success message so the recovery
+		// hint (/checkout <oldLeafID>) survives as the sole viewport
+		// element. Appending before the clear would wipe the message.
+		m.viewport.Clear()
+		m.viewport.ResetScroll()
+		if strings.TrimSpace(out) != "" {
+			m.viewport.AppendText("system", out)
+		}
+		return nil
+	case errors.Is(err, slash.ErrClearScreen):
+		// /cls: viewport-only clear. No state mutation, no scroll reset.
+		// (ErrClearViewport alias routes here too — same error value.)
 		m.viewport.Clear()
 		return nil
 	case errors.Is(err, slash.ErrShowTree):

@@ -34,6 +34,7 @@ const (
 	KindSessionInfo         Kind = "SessionInfo"
 	KindCustom              Kind = "Custom"
 	KindCustomMessage       Kind = "CustomMessage"
+	KindClearMarker         Kind = "ClearMarker"
 )
 
 // CurrentSchemaVersion is the session-header version this build writes. The
@@ -102,6 +103,8 @@ func kindOf(p Payload) Kind {
 		return KindCustom
 	case CustomMessagePayload:
 		return KindCustomMessage
+	case ClearMarkerPayload:
+		return KindClearMarker
 	}
 	return KindCustom
 }
@@ -244,6 +247,25 @@ type CustomMessagePayload struct {
 
 func (CustomMessagePayload) isPayload() {}
 
+// ClearMarkerPayload marks a hard context boundary. Appended by /clear as
+// a child of the current leaf. BuildContext truncates the leaf→root walk
+// at the first ClearMarker encountered (most-recent first), so subsequent
+// turns see an empty history. The marker itself is excluded from the kept
+// slice; only entries newer than it (children appended after the clear)
+// survive the cutoff.
+//
+// Recovery: /checkout <oldLeafID> walks from the pre-clear leaf, which
+// never reaches the ClearMarker (it's a descendant, not an ancestor), so
+// the original context is fully restored.
+//
+// Reason stores an optional human-readable note (e.g. why /clear was
+// invoked). Reserved for future /clear --summarize use; empty today.
+type ClearMarkerPayload struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func (ClearMarkerPayload) isPayload() {}
+
 // --- JSON marshaling ---
 
 // MarshalJSON serializes Entry as {id, parentId, kind, timestamp, payload}.
@@ -353,6 +375,12 @@ func decodePayload(kind Kind, raw json.RawMessage) (Payload, error) {
 		return v, nil
 	case KindCustomMessage:
 		var v CustomMessagePayload
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("state: decode %s payload: %w", kind, err)
+		}
+		return v, nil
+	case KindClearMarker:
+		var v ClearMarkerPayload
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return nil, fmt.Errorf("state: decode %s payload: %w", kind, err)
 		}

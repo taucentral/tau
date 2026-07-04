@@ -10,74 +10,113 @@ import (
 // compaction is required. FindCutPoint returns this as a sentinel index.
 const NoCutNeeded = -1
 
-// FindCutPoint walks backward from walk[0] (the leaf) toward walk[len-1]
-// (the root), accumulating token counts, and returns the index of the
-// OLDEST entry that remains in context. Entries older than the cut are
-// archived by the sliding-window stage.
+// FindCutPoint returns the index of the OLDEST entry that remains in
+// context after compaction. Entries older than the cut are archived by the
+// sliding-window stage.
 //
-// Returns NoCutNeeded when the total token count of walk is already at or
-// below targetKept.
+// keepRecentTokens is the FLOOR on the kept region (matching pi's
+// keepRecentTokens). The algorithm:
 //
-// Algorithm (per spec "Cut-point detection"):
+//  1. Pre-compute eligible cut points (ascending index = oldest first).
+//  2. Default cutIndex = cutPoints[0] (the OLDEST eligible). This is the
+//     force-keep minimum when the floor is never crossed: compaction
+//     occurs only at the natural session boundary.
+//  3. Walk BACKWARD from leaf (walk[0]) toward root (walk[N-1]),
+//     accumulating BPE-accurate tokens.
+//  4. When `accumulated >= keepRecentTokens`, find the closest eligible
+//     cut point at-or-newer than the crossing entry (i.e., the smallest
+//     cutPoint index `c` such that `c >= i`) and use that as the cut.
+//  5. After the floor cut: extend to include any protected entries that
+//     fall in the would-be archived region (protected entries cannot be
+//     archived).
 //
-//  1. Compute the per-entry token count via counter.
-//  2. If total <= targetKept, no compaction is needed.
-//  3. Walk leaf → root, accumulating kept tokens. Stop adding entries as
-//     soon as the next entry would push the total over targetKept.
-//  4. Among the kept region, the deepest ELIGIBLE entry is the ideal cut.
-//  5. Extend the cut to include any protected entries that fall in the
-//     would-be archived region (protected entries cannot be archived).
+// Floor enforcement and protected-entry extension both pull entries from
+// the archived region into the kept region. They compose; both effects
+// apply.
 //
-// Eligibility (per spec): an entry is an eligible cut boundary iff it is a
-// Message kind entry that is NOT a tool-result-only user message AND NOT a
-// user message whose immediately-younger neighbor is an assistant message
-// with ToolUse blocks. Non-message entries (SessionHeader, Label, etc.)
-// are not eligible cut points but can still be included in the kept region.
+// Reference: third-party/pi/packages/coding-agent/src/core/compaction/compaction.ts:387-449
+//
+// Eligibility (per spec): an entry is an eligible cut boundary iff it is
+// a Message kind entry that is NOT a tool-result-only user message AND
+// NOT a user message whose immediately-younger neighbor is an assistant
+// message with ToolUse blocks. Non-message entries (SessionHeader, Label,
+// etc.) are not eligible cut points but can still be included in the kept
+// region.
 //
 // walk MUST be in leaf → root order (as produced by state.Tree.WalkFromLeaf).
+// keepRecentTokens is the FLOOR; ReserveTokens (the trigger threshold) is
+// handled by MaybeCompact and does NOT influence this function (design.md
+// D1.4).
 func FindCutPoint(
 	walk []state.Entry,
 	protected ProtectionList,
 	counter tokencounter.TokenCounter,
 	model string,
-	targetKept int,
+	keepRecentTokens int,
 ) int {
 	if len(walk) == 0 {
 		return NoCutNeeded
 	}
 	tokens := make([]int, len(walk))
-	total := 0
 	for i, e := range walk {
 		tokens[i] = countEntryTokens(e, counter, model)
-		total += tokens[i]
-	}
-	if total <= targetKept {
-		return NoCutNeeded
 	}
 
-	running := 0
-	idealCut := -1
-	for i, e := range walk {
-		if running+tokens[i] > targetKept {
-			break
-		}
-		running += tokens[i]
-		if isEligibleCut(e, walk, i) {
-			idealCut = i
+	// Pre-compute eligible cut points in ascending index order (oldest
+	// first, since walk[N-1] is the root). Mirrors pi's findValidCutPoints
+	// at compaction.ts:300-338.
+	cutPoints := make([]int, 0, len(walk))
+	for i := range walk {
+		if isEligibleCut(walk[i], walk, i) {
+			cutPoints = append(cutPoints, i)
 		}
 	}
-	if idealCut < 0 {
-		// Could not fit even the leaf in budget (small targetKept or a
-		// very large leaf entry). Force-keep walk[0] so we don't archive
-		// the entire tree; the next compaction will revisit.
-		idealCut = 0
+	if len(cutPoints) == 0 {
+		// No eligible cut anywhere. Force-keep walk[0] (the leaf) so we
+		// don't archive the entire tree; the next compaction will revisit.
+		// This matches pi's `cutPoints.length === 0` branch at
+		// compaction.ts:395-397.
+		return 0
+	}
+
+	// Default: keep from the OLDEST eligible cut. In tau's walk layout,
+	// walk[0] is the leaf (newest) and walk[N-1] is the root (oldest), so
+	// the OLDEST eligible has the HIGHEST index — cutPoints[len-1]. (Pi's
+	// array layout is the reverse: pi's cutPoints[0] is the oldest. See
+	// compaction.ts:401.)
+	//
+	// This default is the force-keep minimum when the floor is never
+	// crossed — compaction occurs only at the natural session boundary.
+	cutIndex := cutPoints[len(cutPoints)-1]
+
+	// Walk forward in array index (i=0→N-1), which is leaf → root (newest
+	// → oldest) in walk order, accumulating tokens. When the floor is
+	// crossed, find the closest eligible cut at-or-newer than the crossing
+	// entry. In tau's layout, "newer than i" = "closer to leaf" = "index
+	// <= i". So we want the LARGEST cutPoint <= i. (Pi walks backward in
+	// its layout where entries[startIndex] is oldest; tau's walk direction
+	// is the reverse, so the comparison reverses too. See compaction.ts:403-422.)
+	running := 0
+	for i := 0; i < len(walk); i++ {
+		running += tokens[i]
+		if running < keepRecentTokens {
+			continue
+		}
+		// Floor crossed at index i. Find the largest cutPoint <= i.
+		for j := len(cutPoints) - 1; j >= 0; j-- {
+			if cutPoints[j] <= i {
+				cutIndex = cutPoints[j]
+				break
+			}
+		}
+		break
 	}
 
 	// Protected entries that fall in the would-be archived region must be
-	// pulled into the kept region. Walk from idealCut forward (toward root)
+	// pulled into the kept region. Walk from cutIndex forward (toward root)
 	// and extend the cut to the deepest protected entry.
-	cut := idealCut
-	for j := idealCut + 1; j < len(walk); j++ {
+	cut := cutIndex
+	for j := cutIndex + 1; j < len(walk); j++ {
 		if protected.Contains(walk[j].ID) {
 			cut = j
 		}

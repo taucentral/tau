@@ -89,7 +89,7 @@ func BuildProtectionList(entries []state.Entry, cfg ProtectionConfig) Protection
 			protected[e.ID] = struct{}{}
 		case state.KindSessionHeader, state.KindMessage, state.KindThinkingLevelChange,
 			state.KindModelChange, state.KindCompaction, state.KindBranchSummary,
-			state.KindCustom, state.KindCustomMessage:
+			state.KindCustom, state.KindCustomMessage, state.KindClearMarker:
 			// Other entry kinds are protected via file-tracking and the
 			// cut-point logic; they're not unconditionally pinned here.
 		}

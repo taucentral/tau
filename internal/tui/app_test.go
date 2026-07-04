@@ -117,14 +117,77 @@ func TestAppModel_ClearSlashCommand(t *testing.T) {
 	if m.viewport.ElementCount() != 2 {
 		t.Fatalf("seed: ElementCount = %d, want 2", m.viewport.ElementCount())
 	}
+	leafBefore := m.session.Runtime().State.LeafID()
 
 	m.input.SetValue("ignored")
 	m.handleSlashCommand("/clear")
 	if m.input.Value() != "" {
 		t.Errorf("after /clear: Value = %q, want empty", m.input.Value())
 	}
+	// /clear clears the viewport then appends the success message, so
+	// exactly one element (the recovery hint) survives.
+	if m.viewport.ElementCount() != 1 {
+		t.Fatalf("after /clear: ElementCount = %d, want 1 (success message)", m.viewport.ElementCount())
+	}
+	// The success message must mention both the archived leaf and
+	// /checkout so the user knows how to recover the prior context.
+	view := m.View()
+	if !strings.Contains(view, "Cleared") {
+		t.Errorf("after /clear: view missing 'Cleared': %q", view)
+	}
+	if !strings.Contains(view, "/checkout") {
+		t.Errorf("after /clear: view missing '/checkout' hint: %q", view)
+	}
+	if !strings.Contains(view, leafBefore) {
+		t.Errorf("after /clear: view missing archived leaf id %q: %q", leafBefore, view)
+	}
+	// The leaf pointer advanced (ClearMarker appended as child).
+	if leafAfter := m.session.Runtime().State.LeafID(); leafAfter == leafBefore {
+		t.Errorf("after /clear: leaf unchanged = %q, want advanced", leafAfter)
+	}
+}
+
+// TestAppModel_ClearResetsScroll verifies the ErrContextReset dispatch
+// snaps the viewport back to the top so the scroll offset does not
+// refer to entries that no longer exist.
+func TestAppModel_ClearResetsScroll(t *testing.T) {
+	m := newTestApp(t, 80, 24)
+	m.viewport.AppendText("user", strings.Repeat("line\n", 50))
+	// ScrollUp unconditionally disables autoScroll (ScrollDown would
+	// re-enable it if we happened to land at the bottom).
+	m.viewport.ScrollUp()
+	if m.viewport.AutoScroll() {
+		t.Fatalf("precondition: AutoScroll should be false after ScrollUp")
+	}
+
+	m.handleSlashCommand("/clear")
+	if !m.viewport.AutoScroll() {
+		t.Errorf("after /clear: AutoScroll = false, want true (ResetScroll re-enables)")
+	}
+}
+
+// TestAppModel_ClsSlashCommand verifies /cls clears the viewport
+// WITHOUT mutating session state: LeafID is unchanged before/after.
+func TestAppModel_ClsSlashCommand(t *testing.T) {
+	m := newTestApp(t, 80, 24)
+	m.viewport.AppendText("user", "hello")
+	m.viewport.AppendText("assistant", "world")
+	if m.viewport.ElementCount() != 2 {
+		t.Fatalf("seed: ElementCount = %d, want 2", m.viewport.ElementCount())
+	}
+	leafBefore := m.session.Runtime().State.LeafID()
+
+	m.input.SetValue("ignored")
+	m.handleSlashCommand("/cls")
+	if m.input.Value() != "" {
+		t.Errorf("after /cls: Value = %q, want empty", m.input.Value())
+	}
 	if m.viewport.ElementCount() != 0 {
-		t.Errorf("after /clear: ElementCount = %d, want 0", m.viewport.ElementCount())
+		t.Errorf("after /cls: ElementCount = %d, want 0 (no success message for /cls)", m.viewport.ElementCount())
+	}
+	// /cls performs NO state mutation.
+	if leafAfter := m.session.Runtime().State.LeafID(); leafAfter != leafBefore {
+		t.Errorf("after /cls: leaf changed: %q → %q (state must be untouched)", leafBefore, leafAfter)
 	}
 }
 

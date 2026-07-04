@@ -24,6 +24,7 @@ func TestNewEntry_DerivesKindFromPayload(t *testing.T) {
 		{SessionInfoPayload{Key: "k", Value: "v"}, KindSessionInfo},
 		{CustomPayload{Type: "plugin/x", Data: json.RawMessage(`{}`)}, KindCustom},
 		{CustomMessagePayload{Role: "user", Content: json.RawMessage(`"x"`)}, KindCustomMessage},
+		{ClearMarkerPayload{Reason: "user invoked /clear"}, KindClearMarker},
 	}
 	for i, tc := range cases {
 		e := NewEntry("parent", tc.payload)
@@ -113,6 +114,7 @@ func TestEntry_AllKindsRoundTrip(t *testing.T) {
 		SessionInfoPayload{Key: "exit", Value: "done"},
 		CustomPayload{Type: "plugin", Data: json.RawMessage(`{"x":1}`)},
 		CustomMessagePayload{Role: "user", Content: json.RawMessage(`"injected"`)},
+		ClearMarkerPayload{Reason: "/clear invoked"},
 	}
 	for i, p := range payloads {
 		e := Entry{

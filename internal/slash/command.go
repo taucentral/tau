@@ -49,21 +49,39 @@ type Command interface {
 }
 
 // Sentinel errors used to signal side effects outside the slash package
-// (clearing the viewport, quitting the program, opening the tree view).
-// Callers MUST type-check via errors.Is.
+// (clearing the viewport, resetting context, quitting the program, opening
+// the tree view). Callers MUST type-check via errors.Is.
 var (
 	// ErrQuitRequested signals that the user invoked /quit and the
 	// caller should close the program's quit channel.
 	ErrQuitRequested = errors.New("slash: quit requested")
 
-	// ErrClearViewport signals that the caller should clear the
-	// conversational viewport. Returned by /clear.
-	ErrClearViewport = errors.New("slash: clear viewport")
+	// ErrClearScreen signals that the caller should clear the
+	// conversational viewport WITHOUT mutating session state. Returned
+	// by /cls. The state tree on disk is untouched.
+	ErrClearScreen = errors.New("slash: clear screen")
+
+	// ErrContextReset signals that the caller should clear the
+	// conversational viewport, reset scroll position, and reset the
+	// input buffer. Returned by /clear, which appends a ClearMarker
+	// entry before signalling. The caller clears the viewport FIRST,
+	// then renders the success message (returned alongside the error)
+	// so the recovery hint (/checkout <oldLeafID>) survives as the
+	// sole viewport element.
+	ErrContextReset = errors.New("slash: context reset")
 
 	// ErrShowTree signals that the caller should open the tree-view
 	// overlay. Returned by /tree.
 	ErrShowTree = errors.New("slash: show tree")
 )
+
+// ErrClearViewport is preserved as a deprecated alias for ErrClearScreen so
+// errors.Is(err, ErrClearViewport) continues to match. The alias is the
+// SAME error value as ErrClearScreen (var assignment), so errors.Is
+// against either name matches both. Use ErrClearScreen in new code.
+//
+// Deprecated: use ErrClearScreen.
+var ErrClearViewport = ErrClearScreen
 
 // Registry holds the set of registered commands keyed by Name().
 type Registry struct {
@@ -175,6 +193,7 @@ func DefaultRegistry() *Registry {
 		newModelCommand(),
 		newLabelCommand(),
 		newClearCommand(),
+		newClsCommand(),
 		help,
 		newQuitCommand(),
 	} {

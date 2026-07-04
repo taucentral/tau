@@ -145,10 +145,11 @@ Short flags: -m (model), -p (provider), -c (cwd)
 // via the wire layer and delegates to modes.RunPrint, which performs
 // exactly one agentic turn and writes the result to stdout.
 func runPrint(ctx context.Context, args Args) error {
-	wired, err := wireSession(ctx, args)
+	wired, cleanup, err := wireSession(ctx, args)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	defer func() { _ = wired.Session.Shutdown(ctx) }()
 
 	opts := modes.PrintOptions{
@@ -168,10 +169,11 @@ func runPrint(ctx context.Context, args Args) error {
 // modes.RunRPC, which speaks JSON-RPC 2.0 over stdin/stdout until the
 // client sends session/shutdown or closes stdin.
 func runRPC(ctx context.Context, args Args) error {
-	wired, err := wireSession(ctx, args)
+	wired, cleanup, err := wireSession(ctx, args)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	defer func() { _ = wired.Session.Shutdown(ctx) }()
 
 	opts := modes.RPCOptions{
@@ -186,10 +188,19 @@ func runRPC(ctx context.Context, args Args) error {
 // and delegates to modes.RunInteractive, which boots the bubbletea
 // program and runs until the user quits.
 func runInteractive(ctx context.Context, args Args) error {
-	wired, err := wireSession(ctx, args)
+	wired, cleanup, err := wireSession(ctx, args)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
+	// runPrint and runRPC have always deferred Shutdown; runInteractive
+	// historically relied on the process exit to flush state. Now that
+	// wireSession may inject a caller-owned manager (via --continue /
+	// --resume / --session / --fork), we must Shutdown explicitly so the
+	// manager is closed in an orderly fashion rather than torn down by
+	// os.Exit. cleanup() runs after Shutdown in LIFO order and closes
+	// the injected manager if one was injected.
+	defer func() { _ = wired.Session.Shutdown(ctx) }()
 	settings := wired.Runtime.Options.Settings
 	themeName := ""
 	if settings.Theme != nil {
