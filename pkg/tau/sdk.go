@@ -605,8 +605,8 @@ type sdkResponseObserver struct {
 	ro ResponseObserver
 }
 
-func (a *sdkResponseObserver) ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message) error {
-	return a.ro.ObserveResponse(ctx, (*Request)(req), (*Response)(resp))
+func (a *sdkResponseObserver) ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message, streamErr error) error {
+	return a.ro.ObserveResponse(ctx, (*Request)(req), (*Response)(resp), streamErr)
 }
 
 // sdkToolInterceptor adapts a pkg/tau.ToolInterceptor. The ToolCall /

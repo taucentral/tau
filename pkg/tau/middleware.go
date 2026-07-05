@@ -56,16 +56,19 @@ type RequestMutator interface {
 // The runtime invokes every registered ResponseObserver exactly once
 // per LLM round-trip, after LLMClient.Stream returns — whether the
 // stream completed successfully or returned an error. Observers see
-// the (request, response) pair; the request is the post-mutator
+// the (request, response, err) triple; the request is the post-mutator
 // request that was sent; the response is whatever the provider
 // returned (which may be a zero-value Response when Stream errored
-// before producing any output).
+// before producing any output); err is the error from Stream (nil on
+// success). When err is non-nil the response is guaranteed to be
+// zero-value, so observers can reliably use err to detect the
+// failure path and record the real error string.
 //
 // A non-nil return is logged but does NOT abort the turn; remaining
 // observers still run. This lets audit/telemetry observers fail
 // without breaking the agent loop.
 type ResponseObserver interface {
-	ObserveResponse(ctx context.Context, req *Request, resp *Response) error
+	ObserveResponse(ctx context.Context, req *Request, resp *Response, err error) error
 }
 
 // ToolInterceptor wraps each tool execution within a turn. The two

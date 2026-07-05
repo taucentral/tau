@@ -33,8 +33,12 @@ type runtimeRequestMutator interface {
 // runtimeResponseObserver is the runtime-side interface for an
 // in-process response observer. Adapters wrap the SDK's
 // ResponseObserver.
+//
+// streamErr is the error from LLMClient.Stream (nil on success). It
+// lets observers record the actual failure cause rather than inferring
+// one from an empty response.
 type runtimeResponseObserver interface {
-	ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message) error
+	ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message, streamErr error) error
 }
 
 // runtimeToolInterceptor is the runtime-side interface for an
@@ -105,19 +109,20 @@ func wrapInterceptorAbort(err error) error {
 }
 
 // observeResponse invokes every registered ResponseObserver in
-// registration order with the (request, response) pair. Used by the
-// turn loop after LLMClient.Stream returns (whether successfully or
-// with error). A nil response pointer is silently skipped — observers
-// always receive a non-nil *Message (empty when Stream failed before
-// producing output).
+// registration order with the (request, response, streamErr) triple.
+// Used by the turn loop after LLMClient.Stream returns (whether
+// successfully or with error). streamErr is nil on success; when
+// non-nil, resp is a zero-value *Message and streamErr carries the
+// real failure cause so observers can record it without inferring
+// from an empty response.
 //
 // Observer errors are logged via the standard log package and do NOT
 // short-circuit the remaining observers or the turn. This honours the
 // asymmetric error-propagation contract: observing hooks may fail
 // without breaking the agent loop.
-func observeResponse(ctx context.Context, mw MiddlewareSet, req *llm.Request, resp *llm.Message) {
+func observeResponse(ctx context.Context, mw MiddlewareSet, req *llm.Request, resp *llm.Message, streamErr error) {
 	for _, o := range mw.ResponseObservers {
-		if err := o.ObserveResponse(ctx, req, resp); err != nil {
+		if err := o.ObserveResponse(ctx, req, resp, streamErr); err != nil {
 			log.Printf("agent: response observer %T: %v", o, err)
 		}
 	}

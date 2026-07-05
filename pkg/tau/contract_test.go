@@ -740,12 +740,13 @@ type recordingObserver struct {
 type observedPair struct {
 	Req Request
 	Res Response
+	Err error
 }
 
-func (o *recordingObserver) ObserveResponse(ctx context.Context, req *Request, resp *Response) error {
+func (o *recordingObserver) ObserveResponse(ctx context.Context, req *Request, resp *Response, streamErr error) error {
 	o.calls.Add(1)
 	o.mu.Lock()
-	o.pairs = append(o.pairs, observedPair{Req: *req, Res: *resp})
+	o.pairs = append(o.pairs, observedPair{Req: *req, Res: *resp, Err: streamErr})
 	err := o.err
 	o.mu.Unlock()
 	return err

@@ -215,7 +215,7 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 				// the empty message so audit/telemetry middleware see
 				// the failure, then surface the wrapped error.
 				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
-				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
+				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{}, scErr)
 				if llm.IsAbort(scErr) {
 					return s.abortTurn(scErr)
 				}
@@ -244,7 +244,7 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 				// run once with the (request, empty-response) pair so audit /
 				// telemetry middleware see the failure. Errors are logged but
 				// do NOT abort the turn.
-				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
+				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{}, err)
 				if llm.IsAbort(err) {
 					return s.abortTurn(err)
 				}
@@ -357,7 +357,7 @@ func (s *AgentSession) afterStream(turnCtx context.Context, req *llm.Request, as
 	// the stream completes. The observer sees the (request, response)
 	// pair — the response is the accumulated assistant Message. Errors
 	// are logged but do NOT abort the turn (observing hook).
-	observeResponse(turnCtx, s.rt.Options.Middleware, req, assistant)
+	observeResponse(turnCtx, s.rt.Options.Middleware, req, assistant, nil)
 
 	// Step 4: execute any tool calls. Per spec, tool_call/tool_result
 	// events fire BEFORE message_end.

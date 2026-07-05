@@ -59,7 +59,7 @@ type rtObserver struct {
 	err   error
 }
 
-func (o *rtObserver) ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message) error {
+func (o *rtObserver) ObserveResponse(ctx context.Context, req *llm.Request, resp *llm.Message, streamErr error) error {
 	o.calls.Add(1)
 	o.mu.Lock()
 	o.reqs = append(o.reqs, req)
