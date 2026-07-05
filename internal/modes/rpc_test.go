@@ -312,16 +312,28 @@ func TestRunRPC_NotificationFromClientIsDropped(t *testing.T) {
 }
 
 // TestRunRPC_CancelledContextReturns verifies ctx cancellation
-// propagates to RunRPC's return value.
+// propagates to RunRPC's return value even when the read is blocked
+// waiting for client input.
+//
+// The test uses an io.Pipe so ReadBytes blocks until cancel fires —
+// the realistic model for "stdin is a pipe waiting for the next frame
+// when the context is cancelled." A bytes.Reader over an empty buffer
+// was used here previously; it returned EOF before cancel could be
+// observed, making the test nondeterministic (the goroutine could
+// finish and return nil before cancel() ran).
 func TestRunRPC_CancelledContextReturns(t *testing.T) {
 	h := newRPCTestHarness(t)
 	defer h.close()
+
+	rIn, wIn := io.Pipe()
+	defer rIn.Close()
+	defer wIn.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- RunRPC(ctx, RPCOptions{
-			Stdin:  bytes.NewReader(h.inbuf.Bytes()),
+			Stdin:  rIn,
 			Stdout: h.lockingWriter(),
 		}, h.sess)
 	}()

@@ -162,7 +162,7 @@ func (c *tiktokenCounter) warnFallback(model string) {
 	if _, loaded := c.warned.LoadOrStore(model, struct{}{}); loaded {
 		return
 	}
-	slog.Warn("tokencounter: no BPE encoding registered for model; using chars/4 heuristic",
+	slog.Warn("tokencounter: no BPE encoding registered for model; using script-aware heuristic",
 		"model", model,
 		"hint", "token counts will be approximate; add the model to modelPrefixRegistry if a known encoding exists",
 	)

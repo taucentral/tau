@@ -204,3 +204,100 @@ func TestTiktoken_ConcurrentSafe(t *testing.T) {
 		t.Errorf("concurrent: %v", err)
 	}
 }
+
+// TestHeuristic_ASCII_MatchesOldBehavior is the explicit regression guard
+// for the ASCII path. External test stubs (runtime_test.go) depend on
+// HeuristicCounter.Count returning max(1, len(text)/4) for ASCII input.
+// The script-aware rewrite must preserve that exactly.
+func TestHeuristic_ASCII_MatchesOldBehavior(t *testing.T) {
+	h := HeuristicCounter{}
+	cases := []string{
+		"",
+		"a",
+		"ab",
+		"abc",
+		"abcd",
+		"abcde",
+		"abcdef",
+		"abcdefg",
+		"abcdefgh",
+		"abcdefghi",
+		"hello world, this is a test string",
+		strings.Repeat("a", 100),
+	}
+	for _, text := range cases {
+		want := len(text) / 4
+		if want == 0 && text != "" {
+			want = 1
+		}
+		got := h.Count("any-model", text)
+		if got != want {
+			t.Errorf("Count(%q) = %d, want %d (legacy len/4 formula)", text, got, want)
+		}
+	}
+}
+
+// TestHeuristic_ScriptAware verifies the script-aware buckets produce
+// reasonable estimates for non-ASCII content. Assertions use loose bounds
+// rather than exact numbers — the ratios are heuristic estimates that may
+// be recalibrated, and tight assertions would make the tests brittle.
+func TestHeuristic_ScriptAware(t *testing.T) {
+	h := HeuristicCounter{}
+	cases := []struct {
+		name      string
+		text      string
+		minTokens int // inclusive lower bound
+		maxTokens int // inclusive upper bound
+	}{
+		// Pure ASCII baseline — exact match to legacy formula.
+		{"ascii_short", "hello", 1, 2}, // 5*0.25=1.25 → floor 1
+		{"ascii_long", "hello world this is a test", 6, 7}, // 26*0.25=6.5 → floor 6
+
+		// CJK — 1.5 chars/token. 4 chars → ~2.67 → floor 2.
+		{"chinese_short", "你好世界", 2, 4},
+		// 13 chars → ~8.67 → floor 8.
+		{"chinese_long", "你好世界，这是一个测试字符串", 8, 13},
+
+		// Japanese (Han + Hiragana mix) — same bucket.
+		{"japanese_mixed", "こんにちは世界", 4, 7}, // 7 chars → ~4.67 → floor 4
+
+		// Korean (Hangul + ASCII space).
+		{"korean", "안녕하세요 세계", 4, 7}, // 6 Hangul + 1 space → ~4.25 → floor 4
+
+		// Other scripts — 2.5 chars/token.
+		{"cyrillic", "Привет мир", 3, 6}, // 9 Cyrillic + 1 space → ~3.85 → floor 3
+		{"arabic", "مرحبا بالعالم", 4, 8}, // 12 Arabic + 1 space → ~5.05 → floor 5
+
+		// Emoji — 1.0 chars/token (1 token per emoji).
+		{"emoji_pure", "😀😁😂🤣😃", 5, 5},
+
+		// Mixed ASCII + CJK (realistic: code with Chinese comment).
+		// "def hello " (10 ASCII → 2.5) + "你好世界" (4 CJK → 2.67) = 5.17 → floor 5.
+		{"mixed_ascii_cjk", "def hello 你好世界", 4, 8},
+
+		// Single-rune min-clamp cases.
+		{"single_cjk", "你", 1, 1},   // 0.667 → floor 0 → clamp 1
+		{"single_emoji", "😀", 1, 1}, // 1.0 → floor 1
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := h.Count("any-model", tc.text)
+			if got < tc.minTokens || got > tc.maxTokens {
+				t.Errorf("Count(%q) = %d, want in [%d, %d]", tc.text, got, tc.minTokens, tc.maxTokens)
+			}
+		})
+	}
+}
+
+// TestHeuristic_ModelParamIgnored confirms the model parameter has no
+// effect on the count. This is the documented contract — per-model
+// calibration is a separate opt-in layer.
+func TestHeuristic_ModelParamIgnored(t *testing.T) {
+	h := HeuristicCounter{}
+	text := "hello 你好 world 世界"
+	first := h.Count("glm-5.2", text)
+	second := h.Count("some-other-model", text)
+	if first != second {
+		t.Errorf("model param changed count: glm-5.2=%d, some-other-model=%d (must be identical)", first, second)
+	}
+}

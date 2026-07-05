@@ -81,31 +81,76 @@ func RunRPC(ctx context.Context, opts RPCOptions, session *agent.AgentSession) e
 	srv := newRPCServer(session, stdout)
 	defer srv.stop()
 
-	// Main loop: read a line, dispatch, repeat. A line may be longer
-	// than bufio's default token cap; Scanner is avoided for that
-	// reason. The reader here blocks until input is available or the
-	// context fires.
+	// Main loop: read a line, dispatch, repeat.
+	//
+	// The blocking read runs in a dedicated goroutine so context
+	// cancellation can interrupt a pending read. In production stdin
+	// is typically a pipe that blocks indefinitely between frames; a
+	// top-level ReadBytes call would not observe ctx until the peer
+	// sent data or closed the connection. By selecting on ctx.Done()
+	// in the main loop, cancel takes effect promptly regardless of
+	// whether a read is pending.
+	//
+	// The reader goroutine sends newline-delimited frames to readCh
+	// (capacity 1) and exits when the reader returns an error. If the
+	// main loop exits first — via cancel, shutdown, or handler error —
+	// the reader goroutine may remain blocked on the next ReadBytes
+	// call until the reader EOFs; this is a single bounded, self-
+	// cleaning goroutine that exits when the peer closes the
+	// connection. The send itself selects on ctx.Done() so the
+	// goroutine also exits if the channel buffer holds an unconsumed
+	// frame at shutdown.
 	reader := bufio.NewReader(stdin)
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
+	type readResult struct {
+		line []byte
+		err  error
+	}
+	readCh := make(chan readResult, 1)
+	go func() {
+		for {
+			line, err := reader.ReadBytes('\n')
+			select {
+			case readCh <- readResult{line: line, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
-		line, readErr := reader.ReadBytes('\n')
-		// Trim trailing whitespace; blank lines are skipped.
-		trimmed := trimSpaceBytes(line)
-		if len(trimmed) > 0 {
-			if err := srv.handleLine(ctx, trimmed); err != nil {
-				if errors.Is(err, errShutdown) {
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case res := <-readCh:
+			// Trim trailing whitespace; blank lines are skipped.
+			trimmed := trimSpaceBytes(res.line)
+			if len(trimmed) > 0 {
+				if err := srv.handleLine(ctx, trimmed); err != nil {
+					if errors.Is(err, errShutdown) {
+						return nil
+					}
+					return err
+				}
+			}
+			if res.err != nil {
+				if errors.Is(res.err, io.EOF) {
+					// ctx cancel takes precedence over a clean EOF
+					// so callers observe the cancellation they
+					// requested, even when stdin closes concurrently.
+					// (Select picks randomly when both ctx.Done and
+					// readCh are ready; this check makes the EOF path
+					// return the same ctx.Err() the cancel path
+					// would.)
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					return nil
 				}
-				return err
+				return fmt.Errorf("rpc: read stdin: %w", res.err)
 			}
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				return nil
-			}
-			return fmt.Errorf("rpc: read stdin: %w", readErr)
 		}
 	}
 }
