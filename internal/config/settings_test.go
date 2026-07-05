@@ -82,6 +82,71 @@ func TestSettings_UnknownFieldRejected(t *testing.T) {
 	}
 }
 
+// TestSettings_ToolsUnknownFieldRejected verifies that strict JSON
+// decoding rejects unknown fields inside the "tools" namespace,
+// per task 5.3.
+func TestSettings_ToolsUnknownFieldRejected(t *testing.T) {
+	const bad = `{"tools":{"hydrationMode":"heuristic","bogusField":42}}`
+	var s Settings
+	err := strictJSONDecode([]byte(bad), &s)
+	if err == nil {
+		t.Fatalf("expected schema violation for unknown tools field")
+	}
+	if !errors.Is(err, ErrSchemaViolation) {
+		t.Errorf("err = %v, want ErrSchemaViolation", err)
+	}
+}
+
+// TestSettings_ToolsDefaultsApplied verifies the default Settings
+// carries sensible Tools defaults (heuristic mode, window=5).
+func TestSettings_ToolsDefaultsApplied(t *testing.T) {
+	s := DefaultSettings()
+	if s.Tools == nil {
+		t.Fatalf("Tools should be non-nil in DefaultSettings")
+	}
+	if s.Tools.HydrationMode == nil || *s.Tools.HydrationMode != "heuristic" {
+		t.Errorf("Tools.HydrationMode = %v, want \"heuristic\"", s.Tools.HydrationMode)
+	}
+	if s.Tools.RecentUseWindow == nil || *s.Tools.RecentUseWindow != 5 {
+		t.Errorf("Tools.RecentUseWindow = %v, want 5", s.Tools.RecentUseWindow)
+	}
+}
+
+// TestSettings_ToolsRoundTrip verifies ToolsSettings survives a
+// marshal → strict-decode round trip.
+func TestSettings_ToolsRoundTrip(t *testing.T) {
+	mode := "off"
+	window := 10
+	always := []string{"read", "write"}
+	s := Settings{
+		Tools: &ToolsSettings{
+			HydrationMode:   &mode,
+			RecentUseWindow: &window,
+			AlwaysRender:    always,
+		},
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var back Settings
+	if err := strictJSONDecode(data, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back.Tools == nil {
+		t.Fatalf("Tools missing after round trip")
+	}
+	if back.Tools.HydrationMode == nil || *back.Tools.HydrationMode != "off" {
+		t.Errorf("HydrationMode = %v, want \"off\"", back.Tools.HydrationMode)
+	}
+	if back.Tools.RecentUseWindow == nil || *back.Tools.RecentUseWindow != 10 {
+		t.Errorf("RecentUseWindow = %v, want 10", back.Tools.RecentUseWindow)
+	}
+	if len(back.Tools.AlwaysRender) != 2 {
+		t.Errorf("AlwaysRender len = %d, want 2", len(back.Tools.AlwaysRender))
+	}
+}
+
 func TestSettings_InvalidThinkingLevel(t *testing.T) {
 	bad := ThinkingLevel("bogus")
 	s := Settings{DefaultThinkingLevel: &bad}

@@ -195,73 +195,88 @@ func (s *AgentSession) Run(ctx context.Context, userInput string) error {
 		// Emit MessageStart before consuming any deltas.
 		s.rt.EventBus.Publish(MessageStartEvent{When: time.Now()})
 
-		// Issue the stream call.
-		ch, err := s.rt.Options.LLMClient.Stream(turnCtx, req)
+		// Middleware: RequestShortCircuiter. Runs in registration order
+		// AFTER RequestMutator and AFTER MessageStartEvent, but BEFORE
+		// LLMClient.Stream. The first short-circuiter to return a
+		// non-nil *Message wins; subsequent short-circuiters are NOT
+		// invoked for this turn. A nil slice is the fast path — one
+		// comparison per turn, no interface dispatch, no allocation.
+		// On hit: skip Stream + consumeStream, feed the cached message
+		// through afterStream (ResponseObserver + executeTools) as if
+		// the provider had returned it. On miss: fall through to Stream.
+		var assistant llm.Message
+		var stopReason llm.StopReason
+		shortCircuited := false
+		if scList := s.rt.Options.Middleware.RequestShortCircuiters; len(scList) > 0 {
+			cached, scErr := shortCircuit(turnCtx, s.rt.Options.Middleware, &req)
+			if scErr != nil {
+				// Match the Stream-error path: emit MessageEnd with
+				// StopReasonError and run ResponseObserver once with
+				// the empty message so audit/telemetry middleware see
+				// the failure, then surface the wrapped error.
+				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
+				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
+				if llm.IsAbort(scErr) {
+					return s.abortTurn(scErr)
+				}
+				return scErr // already wrapped as "agent: short-circuit: <err>"
+			}
+			if cached != nil {
+				assistant = *cached
+				// Task 3.3: stamp Source="cache" so billing/telemetry
+				// observers can distinguish cache hits from real LLM
+				// calls. The cache plugin's own Source value (if any)
+				// is overwritten — the runtime owns this field per spec.
+				assistant.Source = "cache"
+				stopReason = assistant.StopReason
+				shortCircuited = true
+			}
+		}
+
+		// Issue the stream call (skipped when a short-circuiter hit).
+		if !shortCircuited {
+			ch, err := s.rt.Options.LLMClient.Stream(turnCtx, req)
+			if err != nil {
+				// Even on failure, emit MessageEnd so subscribers know the
+				// message slot is closed.
+				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
+				// Middleware: ResponseObserver. Even on Stream error, observers
+				// run once with the (request, empty-response) pair so audit /
+				// telemetry middleware see the failure. Errors are logged but
+				// do NOT abort the turn.
+				observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
+				if llm.IsAbort(err) {
+					return s.abortTurn(err)
+				}
+				return fmt.Errorf("agent: stream: %w", err)
+			}
+
+			// Consume the delta stream, emitting MessageUpdate for each.
+			streamedAssistant, finalErr := s.consumeStream(turnCtx, ch)
+
+			// If consumeStream saw a context cancellation, unwind now.
+			if finalErr != nil && llm.IsAbort(finalErr) {
+				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonAborted})
+				return s.abortTurn(finalErr)
+			}
+			// Other Final.Err values are surfaced but the turn continues:
+			// the model's response (partial or complete) is still usable
+			// for tool calls if it has any.
+			assistant = streamedAssistant
+			stopReason = streamedAssistant.StopReason
+			if finalErr != nil && stopReason == "" {
+				stopReason = llm.StopReasonError
+			}
+		}
+
+		// Post-stream pipeline (shared by Stream and short-circuit paths):
+		// ResponseObserver → tool execution → MessageEndEvent. Returns
+		// the tool results (nil if no tool calls ran) and a non-nil
+		// error on interceptor or context abort.
+		toolResults, err := s.afterStream(turnCtx, &req, &assistant, stopReason)
 		if err != nil {
-			// Even on failure, emit MessageEnd so subscribers know the
-			// message slot is closed.
-			s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
-			// Middleware: ResponseObserver. Even on Stream error, observers
-			// run once with the (request, empty-response) pair so audit /
-			// telemetry middleware see the failure. Errors are logged but
-			// do NOT abort the turn.
-			observeResponse(turnCtx, s.rt.Options.Middleware, &req, &llm.Message{})
-			if llm.IsAbort(err) {
-				return s.abortTurn(err)
-			}
-			return fmt.Errorf("agent: stream: %w", err)
+			return err
 		}
-
-		// Consume the delta stream, emitting MessageUpdate for each.
-		assistant, finalErr := s.consumeStream(turnCtx, ch)
-
-		// If consumeStream saw a context cancellation, unwind now.
-		if finalErr != nil && llm.IsAbort(finalErr) {
-			s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonAborted})
-			return s.abortTurn(finalErr)
-		}
-		// Other Final.Err values are surfaced but the turn continues:
-		// the model's response (partial or complete) is still usable
-		// for tool calls if it has any.
-
-		stopReason := assistant.StopReason
-		if finalErr != nil && stopReason == "" {
-			stopReason = llm.StopReasonError
-		}
-
-		// Middleware: ResponseObserver. Runs in registration order after
-		// the stream completes. The observer sees the (request, response)
-		// pair — the response is the accumulated assistant Message. Errors
-		// are logged but do NOT abort the turn (observing hook).
-		observeResponse(turnCtx, s.rt.Options.Middleware, &req, &assistant)
-
-		// Step 4: execute any tool calls. Per spec, tool_call/tool_result
-		// events fire BEFORE message_end.
-		var toolResults []llm.ToolResult
-		if stopReason == llm.StopReasonToolUse {
-			results, toolErr := s.executeTools(turnCtx, assistant)
-			if toolErr != nil {
-				if llm.IsAbort(toolErr) {
-					s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonAborted})
-					return s.abortTurn(toolErr)
-				}
-				// ToolInterceptor.BeforeToolCall abort: surface to caller
-				// per spec. Unlike a tool-execution error (which is
-				// captured in the ToolResult as an IsError result and the
-				// turn continues), an interceptor abort is a turn-level
-				// signal the embedder raised explicitly.
-				if errors.Is(toolErr, errInterceptorAbort) {
-					s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
-					return fmt.Errorf("agent: tool interceptor: %w", toolErr)
-				}
-				// Non-abort tool error: surface but keep going. The
-				// error is captured in the relevant ToolResult already.
-			}
-			toolResults = results
-		}
-
-		// Emit MessageEnd now that tools have run (or there were none).
-		s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: stopReason})
 
 		// Persist the assistant message to the state tree.
 		if _, err := s.rt.State.Append(state.Entry{
@@ -316,6 +331,64 @@ func (s *AgentSession) abortTurn(err error) error {
 	return err
 }
 
+// afterStream runs the post-LLM-stream pipeline: ResponseObserver →
+// tool execution → MessageEndEvent. It is shared by the normal Stream
+// path and the RequestShortCircuiter path so both produce byte-
+// identical event sequences and state side effects.
+//
+// Parameters:
+//   - turnCtx     : the turn-scoped context (cancelled on Abort)
+//   - req         : the post-mutator request that produced assistant
+//   - assistant   : the message returned by Stream OR the cache hit
+//   - stopReason  : the StopReason to honor for tool execution and
+//                   MessageEndEvent. Callers may pass a derived
+//                   stopReason when Stream's Final carried an error.
+//
+// Returns the tool results (nil if StopReason != ToolUse or no tools
+// ran) and a non-nil error on interceptor abort or context
+// cancellation. Tool-execution errors are captured in the ToolResult
+// slice (IsError=true) and the turn continues; the helper does NOT
+// surface them via the error return.
+//
+// The caller is responsible for persisting the assistant message and
+// any tool results to the state tree, and for loop control.
+func (s *AgentSession) afterStream(turnCtx context.Context, req *llm.Request, assistant *llm.Message, stopReason llm.StopReason) ([]llm.ToolResult, error) {
+	// Middleware: ResponseObserver. Runs in registration order after
+	// the stream completes. The observer sees the (request, response)
+	// pair — the response is the accumulated assistant Message. Errors
+	// are logged but do NOT abort the turn (observing hook).
+	observeResponse(turnCtx, s.rt.Options.Middleware, req, assistant)
+
+	// Step 4: execute any tool calls. Per spec, tool_call/tool_result
+	// events fire BEFORE message_end.
+	var toolResults []llm.ToolResult
+	if stopReason == llm.StopReasonToolUse {
+		results, toolErr := s.executeTools(turnCtx, *assistant)
+		if toolErr != nil {
+			if llm.IsAbort(toolErr) {
+				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonAborted})
+				return nil, s.abortTurn(toolErr)
+			}
+			// ToolInterceptor.BeforeToolCall abort: surface to caller
+			// per spec. Unlike a tool-execution error (which is
+			// captured in the ToolResult as an IsError result and the
+			// turn continues), an interceptor abort is a turn-level
+			// signal the embedder raised explicitly.
+			if errors.Is(toolErr, errInterceptorAbort) {
+				s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: llm.StopReasonError})
+				return nil, fmt.Errorf("agent: tool interceptor: %w", toolErr)
+			}
+			// Non-abort tool error: surface but keep going. The
+			// error is captured in the relevant ToolResult already.
+		}
+		toolResults = results
+	}
+
+	// Emit MessageEnd now that tools have run (or there were none).
+	s.rt.EventBus.Publish(MessageEndEvent{When: time.Now(), StopReason: stopReason})
+	return toolResults, nil
+}
+
 // consumeStream drains the delta channel, emitting a MessageUpdate event
 // for each delta and accumulating into an assistant Message. Returns the
 // assembled message and the Final.Err (or a ctx error). The Message is
@@ -349,7 +422,9 @@ func (s *AgentSession) consumeStream(ctx context.Context, ch <-chan llm.Delta) (
 
 // buildRequest assembles an llm.Request from the current state: system
 // blocks come from prompts.Assembler, messages from state.BuildContext,
-// tools from the runtime's Registry.
+// tools from the runtime's Registry. Per-turn TurnSignals are derived
+// from the message history and Tools settings; the Registry consults
+// them when evaluating LazyHeadlessTool hydration triggers.
 func (s *AgentSession) buildRequest(ctx context.Context) (llm.Request, error) {
 	built, err := s.rt.State.BuildContext(ctx)
 	if err != nil {
@@ -364,13 +439,45 @@ func (s *AgentSession) buildRequest(ctx context.Context) (llm.Request, error) {
 	systemBlocks := append([]llm.ContentBlock{}, built.System...)
 	systemBlocks = append(systemBlocks, system...)
 
+	// Build per-turn signals from the message history + Tools settings.
+	// The agent layer bridges config.ToolsSettings into the signals
+	// struct so internal/tools never imports internal/config.
+	signals := buildTurnSignals(built.Messages, s.toolsSettingsView())
+
+	schemas, err := s.rt.Registry.Schemas(ctx, signals)
+	if err != nil {
+		return llm.Request{}, fmt.Errorf("build request: hydrate tools: %w", err)
+	}
+
 	return llm.Request{
 		Model:     s.rt.Options.Model,
 		System:    systemBlocks,
 		Messages:  built.Messages,
-		Tools:     s.rt.Registry.Schemas(),
+		Tools:     schemas,
 		Transport: llm.Transport(s.rt.Options.Transport),
 	}, nil
+}
+
+// toolsSettingsView copies the session's ToolsSettings (from
+// SessionOptions.Settings.Tools) into the local toolsSettingsView
+// consumed by buildTurnSignals. Nil settings yield zero values, which
+// buildTurnSignals maps to documented defaults (heuristic mode, window=5).
+func (s *AgentSession) toolsSettingsView() toolsSettingsView {
+	t := s.rt.Options.Settings.Tools
+	if t == nil {
+		return toolsSettingsView{}
+	}
+	v := toolsSettingsView{
+		AlwaysRender:    t.AlwaysRender,
+		RecentUseWindow: 0,
+	}
+	if t.HydrationMode != nil {
+		v.HydrationMode = *t.HydrationMode
+	}
+	if t.RecentUseWindow != nil {
+		v.RecentUseWindow = *t.RecentUseWindow
+	}
+	return v
 }
 
 // executeTools runs every ToolUse in the assistant message, returning
@@ -477,6 +584,24 @@ func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) (llm.Too
 		// Unknown tool: synthesize a failure so the model can react.
 		result = tools.NewErrorResult(fmt.Sprintf("tool %q is not registered", use.Name))
 	} else {
+		// First-call miss detection (task 4.1). If the model called a
+		// LazyHeadlessTool whose schema was not rendered this turn,
+		// hydrate to prime the cache (the schema is discarded — the
+		// call already happened), then emit HydrationMissEvent so
+		// subscribers see the miss. Per design.md D1.3 this fallback
+		// always runs regardless of HydrationMode.
+		if lazy, ok := tool.(tools.LazyHeadlessTool); ok {
+			rendered := s.rt.Registry.LastRendered()
+			if !rendered[use.Name] {
+				_, _ = lazy.Hydrate(ctx)
+				s.rt.EventBus.Publish(HydrationMissEvent{
+					When:     time.Now(),
+					ToolName: call.Name,
+					TurnID:   fmt.Sprintf("%d", s.turnCounter.Load()),
+				})
+			}
+		}
+
 		r, execErr := tool.Execute(ctx, call)
 		if execErr != nil {
 			if llm.IsAbort(execErr) {
@@ -490,6 +615,15 @@ func (s *AgentSession) runOneTool(ctx context.Context, use llm.ToolUse) (llm.Too
 			}
 		} else {
 			result = r
+		}
+
+		// RecordToolUse after Execute (task 3.2). The recency tracker
+		// fires whenever Execute was invoked without infrastructure
+		// failure; application-level errors (IsError=true) still count
+		// as tool use from the model's perspective. The nil-check is
+		// defensive per the task spec.
+		if execErr == nil && s.rt.Registry != nil {
+			s.rt.Registry.RecordToolUse(call.Name)
 		}
 	}
 

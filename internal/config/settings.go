@@ -67,6 +67,25 @@ type CompactionSettings struct {
 	KeepRecentTokens *int  `json:"keepRecentTokens,omitempty"`
 }
 
+// ToolsSettings configures lazy-tool hydration. All fields are optional;
+// nil means "use the zero-value default" which preserves eager rendering
+// for tools that do not implement LazyHeadlessTool.
+//
+// Fields:
+//   - HydrationMode (default "heuristic"): how the registry evaluates
+//     LazyHeadlessTool triggers. One of "heuristic", "model_declared",
+//     "off". "off" disables lazy registration entirely.
+//   - AlwaysRender: tool names that always render regardless of the
+//     heuristic. Per-deployment escape hatch for tools the workflow
+//     depends on.
+//   - RecentUseWindow (default 5): how many turns of tool-call history
+//     count as "recent" for the recency trigger.
+type ToolsSettings struct {
+	HydrationMode   *string  `json:"hydrationMode,omitempty"`
+	AlwaysRender    []string `json:"alwaysRender,omitempty"`
+	RecentUseWindow *int     `json:"recentUseWindow,omitempty"`
+}
+
 // PromptsSettings configures the system-prompt Assembler's ancestor
 // walk. All fields are optional; nil means "use the zero-value default"
 // which preserves the pre-walk behavior for projects whose cwd is the
@@ -153,6 +172,7 @@ type Settings struct {
 	FollowUpMode              *SteeringMode            `json:"followUpMode,omitempty"`
 	Theme                     *string                  `json:"theme,omitempty"`
 	Compaction                *CompactionSettings      `json:"compaction,omitempty"`
+	Tools                     *ToolsSettings           `json:"tools,omitempty"`
 	BranchSummary             *BranchSummarySettings   `json:"branchSummary,omitempty"`
 	Retry                     *RetrySettings           `json:"retry,omitempty"`
 	HideThinkingBlock         *bool                    `json:"hideThinkingBlock,omitempty"`
@@ -215,6 +235,8 @@ func DefaultSettings() Settings {
 	skipBranchPrompt := false
 	codeBlockIndent := "  "
 	defaultTrust := "ask"
+	toolsHydrationMode := "heuristic"
+	toolsRecentUseWindow := 5
 
 	return Settings{
 		Transport:            &transport,
@@ -226,6 +248,10 @@ func DefaultSettings() Settings {
 			Enabled:          &enabled,
 			ReserveTokens:    &x,
 			KeepRecentTokens: &keep,
+		},
+		Tools: &ToolsSettings{
+			HydrationMode:   &toolsHydrationMode,
+			RecentUseWindow: &toolsRecentUseWindow,
 		},
 		BranchSummary: &BranchSummarySettings{
 			ReserveTokens: &reserveBranch,

@@ -100,12 +100,59 @@ type ToolInterceptor interface {
 	AfterToolCall(ctx context.Context, call ToolCall, result ToolResult) error
 }
 
+// RequestShortCircuiter may short-circuit the LLM round-trip by
+// returning a complete *Message without calling LLMClient.Stream.
+//
+// The runtime invokes every registered RequestShortCircuiter exactly
+// once per LLM round-trip, in registration order, AFTER every
+// RequestMutator has completed and AFTER MessageStartEvent has been
+// published, but BEFORE LLMClient.Stream is called. The first
+// short-circuiter to return a non-nil *Message wins; subsequent
+// short-circuiters are NOT invoked for the current turn.
+//
+// ShortCircuit returns (*Message, error) with three defined shapes:
+//
+//   - (non-nil, nil): short-circuit hit. The runtime skips
+//     LLMClient.Stream and feeds the returned *Message through
+//     ResponseObserver and the tool-execution path exactly as if the
+//     provider had returned it. If the message has StopReason ==
+//     ToolUse, tool calls execute normally (ToolInterceptor,
+//     Execute, AfterToolCall all fire).
+//
+//   - (nil, nil): miss. The runtime proceeds to the next
+//     short-circuiter, or to LLMClient.Stream if none remain.
+//
+//   - (nil, err): error. The runtime aborts the turn immediately and
+//     returns the error wrapped as "agent: short-circuit: <err>" to
+//     the caller of Run. LLMClient.Stream is NOT called.
+//
+// The runtime sets Message.Source = "cache" on the returned message
+// before invoking ResponseObserver so billing/telemetry observers can
+// distinguish cache hits from real LLM calls.
+//
+// Composition rule: mutators are policy; short-circuiters are
+// performance. A RequestMutator that returns a non-nil error prevents
+// any short-circuiter from running. To block even cached responses,
+// register as a mutator.
+//
+// Cache plugins returning tool-call responses (StopReason == ToolUse)
+// SHALL ensure the tool calls are idempotent — the runtime
+// re-executes them against the live system. A future SafeToReplay
+// flag is a follow-up.
+//
+// The short-circuiter sees the request AFTER mutator normalization.
+// Plugins wanting cross-session cache keys SHALL strip session-specific
+// fields inside their ShortCircuit implementation.
+type RequestShortCircuiter interface {
+	ShortCircuit(ctx context.Context, req *Request) (*Message, error)
+}
+
 // ErrUnknownMiddlewareType is returned by CreateAgentSession when an
 // element of Options.Middleware satisfies none of RequestMutator,
-// ResponseObserver, or ToolInterceptor. The error is compatible with
-// errors.Is so embedders can distinguish it from other constructor
-// errors. The error message names the offending value's Go type via
-// fmt.Sprintf("%T", v).
+// ResponseObserver, ToolInterceptor, or RequestShortCircuiter. The
+// error is compatible with errors.Is so embedders can distinguish it
+// from other constructor errors. The error message names the offending
+// value's Go type via fmt.Sprintf("%T", v).
 //
 // Verify with: errors.Is(err, tau.ErrUnknownMiddlewareType).
 var ErrUnknownMiddlewareType = errors.New("tau: unknown middleware type")

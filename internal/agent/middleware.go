@@ -45,6 +45,14 @@ type runtimeToolInterceptor interface {
 	AfterToolCall(ctx context.Context, call tools.ToolCall, result tools.ToolResult) error
 }
 
+// runtimeRequestShortCircuiter is the runtime-side interface for an
+// in-process request short-circuiter. Adapters wrap the SDK's
+// RequestShortCircuiter. The three-return-shape contract (hit, miss,
+// error) is enforced by the turn loop in session.go.
+type runtimeRequestShortCircuiter interface {
+	ShortCircuit(ctx context.Context, req *llm.Request) (*llm.Message, error)
+}
+
 // MiddlewareSet is the partitioned, type-checked middleware bundle the
 // runtime consumes. CreateAgentSession in pkg/tau builds one via
 // partitionMiddleware; an empty MiddlewareSet is the no-middleware
@@ -63,12 +71,18 @@ type MiddlewareSet struct {
 	// abort (non-nil error); AfterToolCall errors are logged but do not
 	// abort.
 	ToolInterceptors []runtimeToolInterceptor
+
+	// RequestShortCircuiters runs after RequestMutators and after
+	// MessageStartEvent, before LLMClient.Stream. The first to return
+	// a non-nil *llm.Message wins; subsequent short-circuiters are NOT
+	// invoked for the current turn. A non-nil error aborts the turn.
+	RequestShortCircuiters []runtimeRequestShortCircuiter
 }
 
 // empty reports whether the set has zero middleware of any type. Used by
 // the runtime's hot-loop fast path.
 func (m MiddlewareSet) empty() bool {
-	return len(m.RequestMutators) == 0 && len(m.ResponseObservers) == 0 && len(m.ToolInterceptors) == 0
+	return len(m.RequestMutators) == 0 && len(m.ResponseObservers) == 0 && len(m.ToolInterceptors) == 0 && len(m.RequestShortCircuiters) == 0
 }
 
 // errInterceptorAbort is the sentinel wrapper that marks a
@@ -144,4 +158,28 @@ func interceptAfter(ctx context.Context, mw MiddlewareSet, call tools.ToolCall, 
 			log.Printf("agent: tool interceptor after %T: %v", i, err)
 		}
 	}
+}
+
+// shortCircuit invokes every registered RequestShortCircuiter in
+// registration order. Returns:
+//
+//   - (non-nil, nil) when any short-circuiter returned a non-nil
+//     *llm.Message. Subsequent short-circuiters are NOT invoked; the
+//     caller skips LLMClient.Stream and feeds the returned message
+//     through observeResponse + executeTools.
+//   - (nil, err) when any short-circuiter returned a non-nil error.
+//     The turn aborts; the caller surfaces err to Run's caller.
+//   - (nil, nil) when every short-circuiter returned (nil, nil). The
+//     caller proceeds to LLMClient.Stream.
+func shortCircuit(ctx context.Context, mw MiddlewareSet, req *llm.Request) (*llm.Message, error) {
+	for _, sc := range mw.RequestShortCircuiters {
+		msg, err := sc.ShortCircuit(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("agent: short-circuit: %w", err)
+		}
+		if msg != nil {
+			return msg, nil
+		}
+	}
+	return nil, nil
 }

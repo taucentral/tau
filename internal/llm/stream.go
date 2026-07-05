@@ -110,6 +110,11 @@ func (a *StreamAccumulator) Message() Message {
 		ResponseID: a.responseID,
 		StopReason: a.stopReason,
 		Timestamp:  time.Now(),
+		// Identifies the message as a real LLM response. The runtime
+		// stamps short-circuited (cached) messages with Source="cache"
+		// before they reach ResponseObserver. Empty-string defaults to
+		// "llm" semantics for backward compatibility.
+		Source: "llm",
 	}
 	if a.usage != nil {
 		u := *a.usage

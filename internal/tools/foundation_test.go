@@ -108,7 +108,10 @@ func TestRegistry_SchemasSorted(t *testing.T) {
 	r := NewRegistry()
 	r.MustRegister(&fakeTool{name: "zeta"})
 	r.MustRegister(&fakeTool{name: "alpha"})
-	schemas := r.Schemas()
+	schemas, err := r.Schemas(context.Background(), TurnSignals{Mode: HydrationModeOff})
+	if err != nil {
+		t.Fatalf("Schemas error: %v", err)
+	}
 	if len(schemas) != 2 {
 		t.Fatalf("Schemas len = %d, want 2", len(schemas))
 	}

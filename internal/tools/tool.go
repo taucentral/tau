@@ -106,6 +106,111 @@ func (NoRender) RenderResult(result ToolResult, theme *Theme) string { return ""
 // it into a HeadlessTool is what satisfies Tool.
 var _ = (Tool)(nil)
 
+// HydrationMode controls how the registry evaluates LazyHeadlessTool
+// hydration triggers each turn. See design.md D1.2 for the rationale.
+type HydrationMode string
+
+const (
+	// HydrationModeHeuristic is the default. The registry evaluates
+	// triggers in order: AlwaysRender → Settings.Tools.AlwaysRender →
+	// recent use within RecentUseWindow → Intent keyword match.
+	HydrationModeHeuristic HydrationMode = "heuristic"
+
+	// HydrationModeModelDeclared reserves a future two-round-trip
+	// selection prompt. For v1, the registry treats it the same as
+	// HydrationModeOff (everything renders) because the selection
+	// round-trip is not yet implemented.
+	HydrationModeModelDeclared HydrationMode = "model_declared"
+
+	// HydrationModeOff bypasses the hydration heuristic entirely.
+	// LazyHeadlessTool instances render eagerly as if they were
+	// HeadlessTool instances.
+	HydrationModeOff HydrationMode = "off"
+)
+
+// ToolTag carries lightweight metadata used by the hydration heuristic.
+// Tools that want tag-based hydration return a ToolTag from Tag();
+// everything else renders eagerly.
+//
+// See docs/sdk/cookbook.md for the recommended Intent vocabulary
+// ("filesystem.read", "filesystem.write", "search", "memory.recall",
+// "policy.enforce"). Intent is free-form; tau does not prescribe a
+// structured vocabulary.
+type ToolTag struct {
+	// Intent is a free-form string describing when the tool is useful.
+	// The registry substring-matches Intent (case-insensitive) against
+	// the latest user message as one of the hydration triggers.
+	Intent string
+
+	// AlwaysRender, when true, forces the tool to render every turn
+	// regardless of hydration mode or other triggers. Useful for tools
+	// the model must always see.
+	AlwaysRender bool
+
+	// RecentUseWeight adjusts the recency heuristic. Reserved for
+	// future use; zero means use Settings.Tools.RecentUseWindow.
+	RecentUseWeight float64
+}
+
+// TurnSignals packages per-turn data the runtime derives from the state
+// tree and settings, then passes to Registry.Schemas. The Registry
+// consults these fields when evaluating hydration triggers for each
+// LazyHeadlessTool.
+//
+// The runtime (internal/agent) constructs a TurnSignals value in
+// buildRequest before calling Registry.Schemas; embedders never need
+// to build one themselves.
+type TurnSignals struct {
+	// UserMessage is the latest user input. Intent matchers test
+	// against this field (case-insensitive substring match).
+	UserMessage string
+
+	// RecentToolCalls lists tool names called within the last
+	// RecentUseWindow turns. The runtime walks the state tree to
+	// derive this list.
+	RecentToolCalls []string
+
+	// Mode is the active HydrationMode for this turn, copied from
+	// Settings.Tools.HydrationMode.
+	Mode HydrationMode
+
+	// AlwaysRender is the per-deployment override list copied from
+	// Settings.Tools.AlwaysRender. Tools named here render every turn
+	// regardless of the heuristic.
+	AlwaysRender []string
+
+	// RecentUseWindow is the maximum turns-since-last-use a tool can
+	// have before it falls out of RecentToolCalls. Copied from
+	// Settings.Tools.RecentUseWindow.
+	RecentUseWindow int
+}
+
+// LazyHeadlessTool is an opt-in interface that extends HeadlessTool with
+// tag-based hydration. Tools that implement this interface are rendered
+// conditionally per turn based on TurnSignals; tools that do not
+// implement it render eagerly via the existing HeadlessTool.Parameters()
+// path. The runtime type-asserts each registered tool against
+// LazyHeadlessTool — no registration change is required.
+//
+// Hydrate returns the same jsonschema.Schema shape that Parameters()
+// returns on eager tools. Eager and lazy tools share the same schema
+// representation in Request.Tools. The runtime calls Hydrate when the
+// tool matches a hydration trigger OR when a first-call miss occurs
+// (the model called a hidden lazy tool).
+type LazyHeadlessTool interface {
+	HeadlessTool
+
+	// Tag returns a lightweight descriptor used by the runtime to
+	// decide whether to render the tool's full schema this turn.
+	Tag() ToolTag
+
+	// Hydrate returns the full JSON schema, called by the runtime
+	// when the tool is selected for rendering (either by the
+	// hydration heuristic or by a first-call miss). The schema MUST
+	// match the shape returned by Parameters() on eager tools.
+	Hydrate(ctx context.Context) (jsonschema.Schema, error)
+}
+
 // ToolCall is the runtime invocation of a tool. The agent loop constructs
 // this from a provider-side ToolUse block.
 type ToolCall struct {

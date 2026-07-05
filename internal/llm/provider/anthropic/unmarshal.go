@@ -47,6 +47,9 @@ func unmarshalResponse(resp wireResponse) (llm.Message, error) {
 		ResponseID: resp.ID,
 		StopReason: mapStopReason(resp.StopReason),
 		Timestamp:  time.Now(),
+		// Real LLM response; the runtime stamps short-circuited
+		// (cached) messages with Source="cache".
+		Source: "llm",
 	}
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 		msg.Usage = &llm.Usage{

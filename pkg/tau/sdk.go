@@ -456,14 +456,18 @@ type Options struct {
 
 	// Middleware, when non-empty, registers in-process hooks on the
 	// agent turn loop. Each element SHALL satisfy at least one of the
-	// RequestMutator, ResponseObserver, or ToolInterceptor interfaces;
-	// CreateAgentSession type-checks every element and returns
-	// ErrUnknownMiddlewareType for any element that satisfies none.
-	// The runtime partitions the slice into three typed slices
-	// (preserving registration order within each) and invokes each
-	// middleware at its documented intercept point during Run. nil or
-	// an empty slice disables middleware — the runtime takes a fast
-	// path with no observable overhead beyond a nil-slice check.
+	// RequestMutator, ResponseObserver, ToolInterceptor, or
+	// RequestShortCircuiter interfaces; CreateAgentSession type-checks
+	// every element and returns ErrUnknownMiddlewareType for any
+	// element that satisfies none. The runtime partitions the slice
+	// into four typed slices (preserving registration order within
+	// each) and invokes each middleware at its documented intercept
+	// point during Run. An element that satisfies more than one of
+	// the interfaces is appended to every matching slice — embedders
+	// who build such a type explicitly opt in to multi-phase
+	// invocation. nil or an empty slice disables middleware — the
+	// runtime takes a fast path with no observable overhead beyond a
+	// nil-slice check.
 	Middleware []any
 
 	// Store, when non-nil, exposes a cross-session context backend to
@@ -543,11 +547,12 @@ func CreateAgentSession(ctx context.Context, opts Options) (*AgentSession, error
 	return &AgentSession{sess: agent.NewAgentSession(rt), rt: rt}, nil
 }
 
-// partitionMiddleware type-checks every element of mw against the three
+// partitionMiddleware type-checks every element of mw against the four
 // middleware interfaces (RequestMutator, ResponseObserver,
-// ToolInterceptor) and partitions the slice into three typed slices
-// preserving registration order within each type. An element that
-// satisfies none yields ErrUnknownMiddlewareType naming its Go type.
+// ToolInterceptor, RequestShortCircuiter) and partitions the slice
+// into four typed slices preserving registration order within each
+// type. An element that satisfies none yields ErrUnknownMiddlewareType
+// naming its Go type.
 //
 // An element that satisfies more than one interface is appended to every
 // matching slice — embedders who build such a type explicitly opt in to
@@ -569,6 +574,10 @@ func partitionMiddleware(mw []any) (agent.MiddlewareSet, error) {
 		}
 		if i, ok := v.(ToolInterceptor); ok {
 			set.ToolInterceptors = append(set.ToolInterceptors, &sdkToolInterceptor{i})
+			matched = true
+		}
+		if sc, ok := v.(RequestShortCircuiter); ok {
+			set.RequestShortCircuiters = append(set.RequestShortCircuiters, &sdkRequestShortCircuiter{sc})
 			matched = true
 		}
 		if !matched {
@@ -620,6 +629,24 @@ func (a *sdkToolInterceptor) BeforeToolCall(ctx context.Context, call tools.Tool
 
 func (a *sdkToolInterceptor) AfterToolCall(ctx context.Context, call tools.ToolCall, result tools.ToolResult) error {
 	return a.ti.AfterToolCall(ctx, ToolCall(call), ToolResult(result))
+}
+
+// sdkRequestShortCircuiter adapts a pkg/tau.RequestShortCircuiter.
+// The Request and Message aliases make the cast zero-cost.
+type sdkRequestShortCircuiter struct {
+	rsc RequestShortCircuiter
+}
+
+func (a *sdkRequestShortCircuiter) ShortCircuit(ctx context.Context, req *llm.Request) (*llm.Message, error) {
+	msg, err := a.rsc.ShortCircuit(ctx, (*Request)(req))
+	if err != nil {
+		return nil, err
+	}
+	if msg == nil {
+		return nil, nil
+	}
+	out := Message(*msg)
+	return &out, nil
 }
 
 // AgentSession is the SDK handle for one agentic session. A session is

@@ -55,6 +55,9 @@ func unmarshalResponse(resp chatResponse) (llm.Message, error) {
 		ResponseID: resp.ID,
 		StopReason: mapStopReason(choice.FinishReason),
 		Timestamp:  time.Now(),
+		// Real LLM response; the runtime stamps short-circuited
+		// (cached) messages with Source="cache".
+		Source: "llm",
 	}
 	if choice.Message.Content != nil && *choice.Message.Content != "" {
 		msg.Content = append(msg.Content, llm.TextContent{Text: *choice.Message.Content})

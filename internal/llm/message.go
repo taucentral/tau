@@ -380,6 +380,21 @@ type Message struct {
 	Usage      *Usage         `json:"usage,omitempty"`
 	StopReason StopReason     `json:"stopReason,omitempty"`
 	Timestamp  time.Time      `json:"timestamp"`
+
+	// Source identifies the origin of an assistant message. Values:
+	//
+	//   - "llm"    — the message was produced by LLMClient.Stream.
+	//   - "cache"  — the message was produced by a
+	//                RequestShortCircuiter hit.
+	//   - "policy" — reserved for future use (e.g., a policy rejecter
+	//                that synthesizes a denial response).
+	//
+	// The empty string SHALL be treated as "llm" for backward
+	// compatibility with messages constructed before the field
+	// existed. ResponseObserver plugins that need to distinguish
+	// cache hits from real LLM calls read this field; observers that
+	// do not care SHALL ignore it.
+	Source string `json:"source,omitempty"`
 }
 
 // MarshalJSON encodes Message, dispatching each ContentBlock to its concrete

@@ -139,6 +139,25 @@ type ToolResultEvent struct {
 // Topic implements Event.
 func (e ToolResultEvent) Topic() Topic { return TopicToolResult }
 
+// HydrationMissEvent is published when the runtime executes a
+// LazyHeadlessTool whose schema was not rendered this turn (no
+// heuristic trigger matched). Per design.md D1.3, the first-call
+// miss fallback always runs: the runtime hydrates the tool's
+// schema, executes the call, and emits this event so subscribers
+// can observe the miss.
+//
+// Topic re-uses TopicToolCall so subscribers already watching tool
+// activity see misses without subscribing to a new topic. Type-switch
+// in subscribers distinguishes HydrationMissEvent from ToolCallEvent.
+type HydrationMissEvent struct {
+	When     time.Time
+	ToolName string
+	TurnID   string
+}
+
+// Topic implements Event.
+func (e HydrationMissEvent) Topic() Topic { return TopicToolCall }
+
 // MessageEndEvent closes the assistant message: the model returned
 // Final AND any tool execution triggered by this message has completed.
 // Per the agent-loop spec scenario "Full-turn event sequence", the order

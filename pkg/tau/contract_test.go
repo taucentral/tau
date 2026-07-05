@@ -1091,6 +1091,183 @@ func TestContractMiddlewareSentinelIdentity(t *testing.T) {
 	}
 }
 
+// TestContractIdentityGatingAndAuditComposition: register a policy gate
+// (deny-by-default) and an audit observer in the same session. Identity
+// placed in ctx via WithIdentity reaches BeforeToolCall; permitted calls
+// land in the audit sink with the caller's UserID. This exercises the
+// full ABAC composition documented in docs/sdk/cookbook.md (j).
+func TestContractIdentityGatingAndAuditComposition(t *testing.T) {
+	// Allow "viewer" to call "counter"; deny everything else.
+	policy := &identityPolicyInterceptor{
+		allowed: map[string]map[string]bool{
+			"viewer": {"counter": true},
+		},
+	}
+	audit := &identityAuditInterceptor{}
+
+	tool := &countingTool{name: "counter"}
+	opts := contractOpts(t)
+	opts.LLMClient = &toolCallScript{toolName: "counter"}
+	opts.Tools = []HeadlessTool{tool}
+	opts.Middleware = []any{policy, audit}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	runCtx := WithIdentity(context.Background(), Identity{
+		UserID: "alice@example.com",
+		Roles:  []string{"viewer"},
+		Tenant: "acme",
+	})
+	if err := sess.Run(runCtx, "call counter"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The tool was permitted, so Execute was invoked once.
+	if got := tool.callCount(); got != 1 {
+		t.Errorf("counter Execute = %d, want 1 (permit)", got)
+	}
+	// Audit recorded the permit with the caller's identity.
+	entries := audit.entries()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(entries))
+	}
+	if entries[0].UserID != "alice@example.com" {
+		t.Errorf("audit UserID = %q, want %q", entries[0].UserID, "alice@example.com")
+	}
+	if entries[0].Tool != "counter" {
+		t.Errorf("audit Tool = %q, want %q", entries[0].Tool, "counter")
+	}
+	if entries[0].IsError {
+		t.Errorf("audit IsError = true, want false (permit path)")
+	}
+}
+
+// TestContractIdentityDenyShortCircuitsAndStillAudits: when the policy
+// denies a call, BeforeToolCall returns a *ToolResult; the runtime
+// skips Execute but STILL invokes AfterToolCall on both interceptors.
+// This guards the short-circuit-plus-AfterToolCall path at
+// internal/agent/session.go:463-471 and the audit observer's ability
+// to record denials.
+func TestContractIdentityDenyShortCircuitsAndStillAudits(t *testing.T) {
+	// Allow no roles: anonymous identity matches no entry.
+	policy := &identityPolicyInterceptor{
+		allowed: map[string]map[string]bool{
+			"editor": {"counter": true},
+		},
+	}
+	audit := &identityAuditInterceptor{}
+
+	tool := &countingTool{name: "counter"}
+	opts := contractOpts(t)
+	opts.LLMClient = &toolCallScript{toolName: "counter"}
+	opts.Tools = []HeadlessTool{tool}
+	opts.Middleware = []any{policy, audit}
+	sess, err := CreateAgentSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	t.Cleanup(func() { sess.Shutdown(context.Background()) })
+
+	// Anonymous identity: zero value, no roles → deny-by-default.
+	runCtx := WithIdentity(context.Background(), Identity{})
+	if err := sess.Run(runCtx, "call counter"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Execute never ran.
+	if got := tool.callCount(); got != 0 {
+		t.Errorf("counter Execute = %d, want 0 (deny short-circuit)", got)
+	}
+	// Audit still recorded the denial.
+	entries := audit.entries()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1 (AfterToolCall runs on short-circuit)", len(entries))
+	}
+	if !entries[0].IsError {
+		t.Errorf("audit IsError = false, want true (denial result)")
+	}
+	if entries[0].UserID != "" {
+		t.Errorf("audit UserID = %q, want empty (anonymous)", entries[0].UserID)
+	}
+}
+
+// identityAuditEntry is the audit record. Test-local: the real shape
+// lives in the audit-provenance plugin and the cookbook recipe.
+type identityAuditEntry struct {
+	When    time.Time
+	UserID  string
+	Tenant  string
+	Tool    string
+	Args    []byte
+	IsError bool
+}
+
+type identityAuditInterceptor struct {
+	mu      sync.Mutex
+	record  []identityAuditEntry
+}
+
+func (a *identityAuditInterceptor) BeforeToolCall(ctx context.Context, call ToolCall) (*ToolResult, error) {
+	return nil, nil // audit never gates
+}
+
+func (a *identityAuditInterceptor) AfterToolCall(ctx context.Context, call ToolCall, result ToolResult) error {
+	id := IdentityFromContext(ctx)
+	a.mu.Lock()
+	a.record = append(a.record, identityAuditEntry{
+		When:    time.Now().UTC(),
+		UserID:  id.UserID,
+		Tenant:  id.Tenant,
+		Tool:    call.Name,
+		Args:    call.Args,
+		IsError: result.IsError,
+	})
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *identityAuditInterceptor) entries() []identityAuditEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]identityAuditEntry, len(a.record))
+	copy(out, a.record)
+	return out
+}
+
+// identityPolicyInterceptor enforces a role→tool allow list with
+// admin bypass and deny-by-default on the zero Identity.
+type identityPolicyInterceptor struct {
+	allowed map[string]map[string]bool
+}
+
+func (p *identityPolicyInterceptor) isAllowed(id Identity, tool string) bool {
+	for _, role := range id.Roles {
+		if role == "admin" {
+			return true
+		}
+		if tools, ok := p.allowed[role]; ok && tools[tool] {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *identityPolicyInterceptor) BeforeToolCall(ctx context.Context, call ToolCall) (*ToolResult, error) {
+	id := IdentityFromContext(ctx)
+	if !p.isAllowed(id, call.Name) {
+		denial := NewErrorResult("denied by policy for " + id.UserID)
+		return &denial, nil
+	}
+	return nil, nil
+}
+
+func (p *identityPolicyInterceptor) AfterToolCall(ctx context.Context, call ToolCall, result ToolResult) error {
+	return nil
+}
+
 // --- Storage ----------------------------------------------------------------
 //
 // Contract coverage for the cross-session-storage capability spec.

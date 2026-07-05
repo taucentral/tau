@@ -90,9 +90,9 @@ func (i *rtInterceptor) AfterToolCall(ctx context.Context, call tools.ToolCall, 
 	return i.afterErr
 }
 
-// TestMiddlewareSetEmpty pins the empty() helper for the four shapes
-// the runtime hot-path checks: zero middleware, only one type, two
-// types, all three types.
+// TestMiddlewareSetEmpty pins the empty() helper for the five shapes
+// the runtime hot-path checks: zero middleware, only one type (for
+// each of the four types), and a populated set.
 func TestMiddlewareSetEmpty(t *testing.T) {
 	if !(MiddlewareSet{}).empty() {
 		t.Error("MiddlewareSet{}.empty() = false, want true")
@@ -105,6 +105,9 @@ func TestMiddlewareSetEmpty(t *testing.T) {
 	}
 	if (MiddlewareSet{ToolInterceptors: []runtimeToolInterceptor{&rtInterceptor{}}}).empty() {
 		t.Error("MiddlewareSet with one ToolInterceptor reports empty")
+	}
+	if (MiddlewareSet{RequestShortCircuiters: []runtimeRequestShortCircuiter{&rtShortCircuiter{}}}).empty() {
+		t.Error("MiddlewareSet with one RequestShortCircuiter reports empty")
 	}
 }
 

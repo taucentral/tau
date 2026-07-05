@@ -10,6 +10,7 @@
 /sdk-embed
 /sdk-custom-provider
 /plugin-git
+/sdk-abac
 
 # Project-scope settings directory written by the runtime from cwd
 /.tau/
