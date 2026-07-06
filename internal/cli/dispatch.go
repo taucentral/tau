@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/taucentral/tau/internal/modes"
+	tau "github.com/taucentral/tau/pkg/tau"
+	publicmodes "github.com/taucentral/tau/pkg/tau/modes"
 )
 
 // ErrNotImplemented is returned by Dispatch for functionality that the parser
@@ -152,14 +154,22 @@ func runPrint(ctx context.Context, args Args) error {
 	defer cleanup()
 	defer func() { _ = wired.Session.Shutdown(ctx) }()
 
-	opts := modes.PrintOptions{
+	// publicmodes.RunPrint takes the SDK *tau.AgentSession wrapper; the
+	// internal wire layer produces an *agent.AgentSession plus its
+	// runtime. The runtime is the source of truth (state, event bus,
+	// config); tau.NewAgentSession(rt) builds a fresh SDK wrapper around
+	// it. Phase 5 moves wire.go into tau-cli and produces an SDK
+	// wrapper directly, eliminating this bridge.
+	sdkSess := tau.NewAgentSession(wired.Runtime)
+
+	opts := publicmodes.PrintOptions{
 		Prompt:     strings.Join(args.Positional, " "),
 		JSON:       args.JSON,
 		ExportPath: args.Export,
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,
 	}
-	if _, err := modes.RunPrint(ctx, opts, wired.Session); err != nil {
+	if _, err := publicmodes.RunPrint(ctx, opts, sdkSess); err != nil {
 		return err
 	}
 	return nil
@@ -176,12 +186,15 @@ func runRPC(ctx context.Context, args Args) error {
 	defer cleanup()
 	defer func() { _ = wired.Session.Shutdown(ctx) }()
 
-	opts := modes.RPCOptions{
+	// See runPrint for the SDK wrapper bridge rationale.
+	sdkSess := tau.NewAgentSession(wired.Runtime)
+
+	opts := publicmodes.RPCOptions{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
-	return modes.RunRPC(ctx, opts, wired.Session)
+	return publicmodes.RunRPC(ctx, opts, sdkSess)
 }
 
 // runInteractive handles the default TUI mode. It wires the session
