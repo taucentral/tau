@@ -1103,6 +1103,10 @@ func BuiltinTools() []HeadlessTool {
 // Pass one response for a single-shot test; pass several to script a
 // multi-turn exchange. Each Stream call advances to the next response; an
 // empty variadic list yields the provider's built-in default response.
+//
+// NewFauxProvider does NOT read the TAU_FAUX_SCRIPT environment variable.
+// Embedders that need the env-var variant (notably tau-cli's --model faux
+// path) should call NewFauxProviderFromEnv instead.
 func NewFauxProvider(responses ...string) LLMClient {
 	if len(responses) == 0 {
 		return fauxprovider.NewWithResponse(fauxprovider.DefaultResponse)
@@ -1112,3 +1116,400 @@ func NewFauxProvider(responses ...string) LLMClient {
 	// response). For the common single-response case this is exact.
 	return fauxprovider.NewWithResponse(responses[0])
 }
+
+// NewFauxProviderFromEnv returns a deterministic LLMClient that reads the
+// TAU_FAUX_SCRIPT environment variable and falls back to
+// fauxprovider.DefaultResponse when the env var is empty or unset. It is
+// the SDK-level equivalent of fauxprovider.New().
+//
+// tau-cli's wire layer uses this for --model faux so the e2e test harness
+// (test/e2e/modes_integration_test.go) can script responses via the
+// process environment without injecting a provider explicitly.
+func NewFauxProviderFromEnv() LLMClient {
+	return fauxprovider.New()
+}
+
+// --- tau-cli seam (split-tui-into-tau-cli) -----------------------------------
+//
+// The aliases and wrappers in this section expose the construction-time
+// types and helpers tau-cli's wire.go needs to assemble a session against
+// the public SDK facade. They are additive: every existing SDK symbol
+// keeps its identity and signature. tau-cli is the canonical consumer;
+// embedders writing their own wire layer can use them too.
+//
+// See openspec/changes/split-tui-into-tau-cli/specs/sdk-public-api/spec.md
+// for the binding requirements.
+
+// AgentSessionRuntime is the runtime bundle a wired session operates on.
+// Construct one via CreateAgentSessionRuntime; pass it to NewAgentSession
+// (or to CreateAgentSession, which does both steps internally).
+type AgentSessionRuntime = agent.AgentSessionRuntime
+
+// SessionOptions is the construction-time input to
+// CreateAgentSessionRuntime. Its shape mirrors Options (the SDK's
+// CreateAgentSession input) but sits one layer lower: embedders that want
+// the two-step construct (runtime, then session) use SessionOptions +
+// CreateAgentSessionRuntime + NewAgentSession instead of the one-shot
+// CreateAgentSession.
+type SessionOptions = agent.SessionOptions
+
+// CreateAgentSessionRuntime validates opts, applies defaults, and returns
+// a ready-to-use *AgentSessionRuntime. The caller owns the returned
+// runtime and (eventually) the session built on top of it. This is the
+// two-step analogue of CreateAgentSession.
+func CreateAgentSessionRuntime(ctx context.Context, cwd string, opts SessionOptions) (*AgentSessionRuntime, error) {
+	return agent.CreateAgentSessionRuntime(ctx, cwd, opts)
+}
+
+// NewAgentSession wraps an existing *AgentSessionRuntime in the SDK
+// *AgentSession handle. The returned session shares the runtime's event
+// bus, state manager, and options; Run drives the agent loop against
+// them.
+func NewAgentSession(rt *AgentSessionRuntime) *AgentSession {
+	return &AgentSession{sess: agent.NewAgentSession(rt), rt: rt}
+}
+
+// Runtime returns the *AgentSessionRuntime the SDK *AgentSession was built
+// on. It is the escape hatch for embedders that need direct runtime field
+// access (Options.Settings, ConfigDir, EventBus, Session) without paying
+// for a typed accessor per field.
+//
+// Callers that use Runtime accept responsibility for tracking future
+// changes to the runtime's field set. The SDK stability promise applies
+// to the alias type *AgentSessionRuntime, not to its individual fields.
+func (s *AgentSession) Runtime() *AgentSessionRuntime {
+	if s == nil {
+		return nil
+	}
+	return s.rt
+}
+
+// --- Config surface (aliases + helpers) -------------------------------------
+
+// Keybinding is the keyboard shortcut definition inside Settings.Keybindings.
+type Keybinding = config.Keybinding
+
+// ModelDefinition describes one entry in the user's models file. Models
+// are resolved against ProviderDefinition entries via ResolveModel.
+type ModelDefinition = config.ModelDefinition
+
+// ModelCost is the per-million-token pricing attached to a ModelDefinition.
+type ModelCost = config.ModelCost
+
+// ProviderDefinition describes one entry in the user's models file under
+// the providers key. Provider definitions supply the BaseURL and default
+// transport for a named provider.
+type ProviderDefinition = config.ProviderDefinition
+
+// ModelsFile is the parsed shape of ~/.config/tau/models.json (or the
+// project-scoped equivalent). Load via LoadModelsFile.
+type ModelsFile = config.ModelsFile
+
+// SettingsStorage is the file-backed settings interface implemented by
+// FileSettingsStorage (production) and InMemorySettingsStorage (tests).
+type SettingsStorage = config.SettingsStorage
+
+// SettingsScope identifies which scope a settings file applies to.
+type SettingsScope = config.SettingsScope
+
+// ScopeGlobal, ScopeProject are the two scopes SettingsStorage reads and
+// merges. Re-exported as vars (not consts) because SettingsScope is a
+// string type and const blocks of typed strings require Go 1.22+ in some
+// contexts.
+var (
+	ScopeGlobal  = config.ScopeGlobal
+	ScopeProject = config.ScopeProject
+)
+
+// FileSettingsStorage is the production file-backed SettingsStorage.
+// Construct via NewFileSettingsStorage.
+type FileSettingsStorage = config.FileSettingsStorage
+
+// DiagnosticFunc is the callback FileAuthStore invokes when the auth
+// file's mode is looser than 0600. Pass nil to NewFileAuthStore to
+// suppress the diagnostic.
+type DiagnosticFunc = config.DiagnosticFunc
+
+// FileAuthStore is the production file-backed AuthStore. Construct via
+// NewFileAuthStore.
+type FileAuthStore = config.FileAuthStore
+
+// APIAnthropic, APIOpenAI, APIGemini, APIMistral, APIBedrock are the
+// ModelAPI values the runtime recognizes. They route auth resolution and
+// provider selection during session construction.
+const (
+	APIAnthropic = config.APIAnthropic
+	APIOpenAI    = config.APIOpenAI
+	APIGemini    = config.APIGemini
+	APIMistral   = config.APIMistral
+	APIBedrock   = config.APIBedrock
+)
+
+// LoadModelsFile parses the models file at path. The returned *ModelsFile
+// is the in-memory representation the runtime consults during provider
+// resolution; embedders building settings UIs use this to inspect the
+// user's configured providers.
+func LoadModelsFile(path string) (*ModelsFile, error) { return config.LoadModelsFile(path) }
+
+// ResolveModel walks providers + topModels to find the ModelDefinition
+// matching (provider, id). Returns nil when no match exists.
+func ResolveModel(providers map[string]ProviderDefinition, topModels []ModelDefinition, provider, id string) *ModelDefinition {
+	return config.ResolveModel(providers, topModels, provider, id)
+}
+
+// AgentDir returns the absolute path to the agent's config directory
+// (~/.config/tau on Linux). The directory may not exist yet; use
+// MkdirAll to create it before writing.
+func AgentDir() (string, error) { return config.AgentDir() }
+
+// SessionsDir returns the absolute path to the sessions directory for the
+// given working directory. The path encodes the cwd so sessions for
+// different projects coexist under one root.
+func SessionsDir(cwd string) (string, error) { return config.SessionsDir(cwd) }
+
+// MkdirAll creates path (and missing parents) with the mode the runtime
+// requires for config/session directories (0700). It is a thin wrapper
+// around os.MkdirAll that enforces the runtime's file-mode convention.
+func MkdirAll(path string) error { return config.MkdirAll(path) }
+
+// NewFileSettingsStorage returns a file-backed SettingsStorage rooted at
+// agentDir, scoped to cwd. When trusted is false, project-scoped writes
+// are rejected (the caller must explicitly trust the project first).
+func NewFileSettingsStorage(agentDir, cwd string, trusted bool) (*FileSettingsStorage, error) {
+	return config.NewFileSettingsStorage(agentDir, cwd, trusted)
+}
+
+// NewFileAuthStore returns a file-backed AuthStore at path. The diag
+// callback, if non-nil, is invoked once when the auth file's mode is
+// looser than 0600. Pass nil to suppress the diagnostic.
+func NewFileAuthStore(path string, diag DiagnosticFunc) *FileAuthStore {
+	return config.NewFileAuthStore(path, diag)
+}
+
+// --- State surface (aliases + helpers) --------------------------------------
+
+// SessionHeaderPayload is the root-entry payload every session tree
+// starts with. Cwd, Model, Provider, ParentSession, and CreatedAt
+// identify the session and drive migrations.
+type SessionHeaderPayload = state.SessionHeaderPayload
+
+// MessagePayload carries one conversational message in the state tree.
+type MessagePayload = state.MessagePayload
+
+// StateEntry is one node in the state tree: an ID, a parent pointer, a
+// Kind, and a Payload. The tree is append-only; edits fork branches
+// rather than mutate in place.
+//
+// Named StateEntry (not Entry) because the SDK already aliases
+// storage.Entry as tau.Entry for cross-session context storage; the two
+// types are structurally distinct. Callers of StateManager.Append pass
+// StateEntry values.
+type StateEntry = state.Entry
+
+// Kind tags an Entry's payload type so the agent loop, compaction
+// pipeline, and TUI can dispatch without reflection.
+type Kind = state.Kind
+
+// KindMessage is the Kind for MessagePayload entries. Re-exported as a
+// var because Kind is a string type.
+var KindMessage = state.KindMessage
+
+// SessionInfo is one row in a sessions listing: the encoded path, the
+// header payload, and the timestamps the listing surfaces.
+type SessionInfo = state.SessionInfo
+
+// ListSessions returns the sessions recorded under cwd's encoded
+// sessions directory. Empty (without error) when none exist yet.
+func ListSessions(cwd string) ([]SessionInfo, error) { return state.ListSessions(cwd) }
+
+// OpenManager opens an existing state manager rooted at path for the
+// given cwd. The path is the encoded session file; cwd identifies the
+// project for relative path resolution inside the manager.
+func OpenManager(path, cwd string) (StateManager, error) { return state.OpenManager(path, cwd) }
+
+// CreateManager creates a new state manager rooted at cwd's encoded
+// sessions directory and writes the SessionHeader entry. The header's
+// Cwd, Model, Provider, ParentSession, and CreatedAt fields seed the
+// session tree.
+func CreateManager(cwd string, header SessionHeaderPayload) (StateManager, error) {
+	return state.CreateManager(cwd, header)
+}
+
+// --- Tools surface (per-tool factories) -------------------------------------
+//
+// tau.BuiltinTools() returns the full built-in tool set in one call.
+// Embedders composing a subset use the per-tool factories below, each of
+// which takes its OS-backed Operations struct and returns a Tool.
+
+// ReadOperations is the filesystem interface NewReadTool consults. The
+// OS-backed implementation is OSReadOperations (the zero value).
+type ReadOperations = tools.ReadOperations
+
+// OSReadOperations is the production ReadOperations backed by the real
+// filesystem.
+type OSReadOperations = tools.OSReadOperations
+
+// BashOperations is the shell interface NewBashTool consults.
+type BashOperations = tools.BashOperations
+
+// OSBashOperations is the production BashOperations backed by /bin/sh.
+type OSBashOperations = tools.OSBashOperations
+
+// EditOperations is the filesystem-mutation interface NewEditTool consults.
+type EditOperations = tools.EditOperations
+
+// OSEditOperations is the production EditOperations.
+type OSEditOperations = tools.OSEditOperations
+
+// WriteOperations is the filesystem-mutation interface NewWriteTool consults.
+type WriteOperations = tools.WriteOperations
+
+// OSWriteOperations is the production WriteOperations.
+type OSWriteOperations = tools.OSWriteOperations
+
+// GrepOperations is the search interface NewGrepTool consults.
+type GrepOperations = tools.GrepOperations
+
+// OSGrepOperations is the production GrepOperations.
+type OSGrepOperations = tools.OSGrepOperations
+
+// FindOperations is the filesystem-walk interface NewFindTool consults.
+type FindOperations = tools.FindOperations
+
+// OSFindOperations is the production FindOperations.
+type OSFindOperations = tools.OSFindOperations
+
+// LSOperations is the directory-listing interface NewLSTool consults.
+type LSOperations = tools.LSOperations
+
+// OSLSOperations is the production LSOperations.
+type OSLSOperations = tools.OSLSOperations
+
+// NewReadTool returns the built-in read tool wired to ops. The returned
+// Tool is ready to drop into Options.Tools.
+func NewReadTool(ops ReadOperations) Tool { return tools.NewReadTool(ops) }
+
+// NewBashTool returns the built-in bash tool wired to ops.
+func NewBashTool(ops BashOperations) Tool { return tools.NewBashTool(ops) }
+
+// NewEditTool returns the built-in edit tool wired to ops.
+func NewEditTool(ops EditOperations) Tool { return tools.NewEditTool(ops) }
+
+// NewWriteTool returns the built-in write tool wired to ops.
+func NewWriteTool(ops WriteOperations) Tool { return tools.NewWriteTool(ops) }
+
+// NewGrepTool returns the built-in grep tool wired to ops.
+func NewGrepTool(ops GrepOperations) Tool { return tools.NewGrepTool(ops) }
+
+// NewFindTool returns the built-in find tool wired to ops.
+func NewFindTool(ops FindOperations) Tool { return tools.NewFindTool(ops) }
+
+// NewLSTool returns the built-in ls tool wired to ops.
+func NewLSTool(ops LSOperations) Tool { return tools.NewLSTool(ops) }
+
+// --- Direct provider constructors -------------------------------------------
+//
+// Distinct from the registry-backed NewAnthropicClient / NewOpenAIClient
+// wrappers above. tau-cli's wire layer uses these because it knows the
+// provider at wire time and the registry detour is one extra dispatch
+// for no benefit. Embedders that want the registry path keep
+// NewAnthropicClient / NewOpenAIClient.
+
+// AnthropicProviderOptions configures a built-in Anthropic client. The
+// shape mirrors internal/llm/provider/anthropic.Options: APIKey,
+// BaseURL, Headers, Transport, plus the env-var resolution hints.
+//
+// Distinct from AnthropicOptions (the registry-wrapper Options above).
+// AnthropicProviderOptions carries the provider-specific fields (notably
+// any future anthropic-only transport settings) the registry shape
+// folds into its generic ProviderOptions.
+type AnthropicProviderOptions = anthropic.Options
+
+// OpenAIProviderOptions configures a built-in OpenAI (or
+// OpenAI-compatible) client. Carries EnvVar so openai-aware callers can
+// override the env var the provider reads on Stream.
+//
+// Distinct from OpenAIOptions (the registry-wrapper alias for
+// AnthropicOptions). OpenAIProviderOptions aliases openai.Options
+// directly and carries the openai-specific EnvVar field.
+type OpenAIProviderOptions = openai.Options
+
+// AnthropicEnvVar is the env var name the Anthropic provider reads on
+// ResolveAuth ("ANTHROPIC_API_KEY"). Re-exported so embedders can write
+// the same constant the runtime uses when surfacing "missing API key"
+// diagnostics.
+var AnthropicEnvVar = anthropic.EnvVar
+
+// OpenAIEnvVar is the env var name the OpenAI provider reads on
+// ResolveAuth ("OPENAI_API_KEY").
+var OpenAIEnvVar = openai.EnvVar
+
+// AnthropicDefaultBaseURL is the default endpoint the Anthropic provider
+// targets when BaseURL is empty.
+var AnthropicDefaultBaseURL = anthropic.DefaultBaseURL
+
+// OpenAIDefaultBaseURL is the default endpoint the OpenAI provider
+// targets when BaseURL is empty.
+var OpenAIDefaultBaseURL = openai.DefaultBaseURL
+
+// NewAnthropicProvider constructs a built-in Anthropic client directly
+// (no registry lookup). Returns the provider as an LLMClient ready to
+// drop into Options.LLMClient.
+func NewAnthropicProvider(opts AnthropicProviderOptions) (LLMClient, error) {
+	c, err := anthropic.New(opts)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// NewOpenAIProvider constructs a built-in OpenAI (or OpenAI-compatible)
+// client directly (no registry lookup).
+func NewOpenAIProvider(opts OpenAIProviderOptions) (LLMClient, error) {
+	c, err := openai.New(opts)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// ResolveAnthropicAuth resolves an Anthropic API key using the auth chain
+// the built-in provider implements: explicit value (1), auth store (2),
+// AnthropicEnvVar (3). Returns the resolved key plus a human-readable
+// source string ("explicit", "auth.json", "env") for diagnostics.
+//
+// Pass explicit="" to skip step 1 and resolve purely from the store +
+// env. Pass auth=nil to skip step 2 (typical for ephemeral / CI runs).
+func ResolveAnthropicAuth(explicit string, auth AuthStore) (apiKey, source string, err error) {
+	r, err := anthropic.ResolveAuth(explicit, auth)
+	if err != nil {
+		return "", "", err
+	}
+	return r.APIKey, string(r.Source), nil
+}
+
+// ResolveOpenAIAuth resolves an OpenAI API key using the auth chain the
+// built-in provider implements. provider is the logical provider name
+// surfaced in diagnostics ("openai", "deepseek", etc.); envVar is the
+// env var name the chain checks at step 3 (typically OpenAIEnvVar).
+func ResolveOpenAIAuth(provider, envVar, explicit string, auth AuthStore) (apiKey, source string, err error) {
+	r, err := openai.ResolveAuth(provider, envVar, explicit, auth)
+	if err != nil {
+		return "", "", err
+	}
+	return r.APIKey, string(r.Source), nil
+}
+
+// --- Slash command extras ---------------------------------------------------
+
+// ErrContextReset is returned by /clear to signal the caller should
+// reset the agent's working context (drop everything but the system
+// prompt + tool definitions). Re-exported so tau-cli's dispatch can
+// errors.Is this sentinel without importing internal/slash.
+var ErrContextReset = slash.ErrContextReset
+
+// DefaultRegistry is a same-body alias for DefaultSlashRegistry. The TUI
+// calls tau.DefaultRegistry() so its references line up with the
+// Registry type's constructor; tau-cli keeps the call site symmetric
+// with NewRegistry.
+func DefaultRegistry() *Registry { return slash.DefaultRegistry() }

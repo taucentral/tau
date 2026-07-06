@@ -89,6 +89,136 @@ func TestExternalModule_CanNamePublicTypes(t *testing.T) {
 	}
 }
 
+// TestExternalModule_CanNameTauCLISplitSymbols asserts every new symbol
+// added by the split-tui-into-tau-cli change (Phase 1) is reachable from
+// an external module. If any alias or wrapper is removed or renamed in a
+// future release, this test fails to compile — surfacing the breakage at
+// build time rather than at the first external consumer (tau-cli).
+//
+// The assertions are deliberately type-only (no real construction); the
+// underlying behaviour of each wrapper is covered by the internal tests
+// that live next to the wrapped package.
+func TestExternalModule_CanNameTauCLISplitSymbols(t *testing.T) {
+	// Type aliases (one line per alias). If an alias is dropped, the
+	// package fails to compile.
+	var (
+		// Agent session seam.
+		_ tau.AgentSessionRuntime
+		_ tau.SessionOptions
+
+		// Config aliases.
+		_ tau.Keybinding
+		_ tau.ModelDefinition
+		_ tau.ModelCost
+		_ tau.ProviderDefinition
+		_ tau.ModelsFile
+		_ tau.SettingsStorage
+		_ tau.SettingsScope
+		_ tau.FileSettingsStorage
+		_ tau.DiagnosticFunc
+		_ tau.FileAuthStore
+
+		// State aliases.
+		_ tau.SessionHeaderPayload
+		_ tau.MessagePayload
+		_ tau.StateEntry
+		_ tau.Kind
+		_ tau.SessionInfo
+
+		// Tools interfaces and OS-backed concrete types.
+		_ tau.ReadOperations
+		_ tau.OSReadOperations
+		_ tau.BashOperations
+		_ tau.OSBashOperations
+		_ tau.EditOperations
+		_ tau.OSEditOperations
+		_ tau.WriteOperations
+		_ tau.OSWriteOperations
+		_ tau.GrepOperations
+		_ tau.OSGrepOperations
+		_ tau.FindOperations
+		_ tau.OSFindOperations
+		_ tau.LSOperations
+		_ tau.OSLSOperations
+
+		// Provider direct-constructor option types.
+		_ tau.AnthropicProviderOptions
+		_ tau.OpenAIProviderOptions
+	)
+
+	// Vars / consts re-exported from internal packages.
+	var (
+		_ = tau.ScopeGlobal
+		_ = tau.ScopeProject
+		_ = tau.KindMessage
+		_ = tau.AnthropicEnvVar
+		_ = tau.OpenAIEnvVar
+		_ = tau.AnthropicDefaultBaseURL
+		_ = tau.OpenAIDefaultBaseURL
+		_ = tau.ErrContextReset
+	)
+
+	// Const block: the API* identifiers are constants of type ModelAPI
+	// (itself a string newtype). Referencing them in a ModelAPI-typed
+	// const binding forces compile-time resolution and pins the type.
+	const (
+		_ tau.ModelAPI = tau.APIAnthropic
+		_ tau.ModelAPI = tau.APIOpenAI
+		_ tau.ModelAPI = tau.APIGemini
+		_ tau.ModelAPI = tau.APIMistral
+		_ tau.ModelAPI = tau.APIBedrock
+	)
+
+	// Function wrappers. Referencing each by name in a var binding proves
+	// the symbol is exported; the underlying behaviour is tested elsewhere.
+	var (
+		// Agent constructors + Runtime() escape hatch.
+		_ = tau.CreateAgentSessionRuntime
+		_ = tau.NewAgentSession
+		_ = tau.NewFauxProviderFromEnv
+
+		// Config helpers.
+		_ = tau.LoadModelsFile
+		_ = tau.ResolveModel
+		_ = tau.AgentDir
+		_ = tau.SessionsDir
+		_ = tau.MkdirAll
+		_ = tau.NewFileSettingsStorage
+		_ = tau.NewFileAuthStore
+
+		// State helpers.
+		_ = tau.ListSessions
+		_ = tau.OpenManager
+		_ = tau.CreateManager
+
+		// Per-tool factories.
+		_ = tau.NewReadTool
+		_ = tau.NewBashTool
+		_ = tau.NewEditTool
+		_ = tau.NewWriteTool
+		_ = tau.NewGrepTool
+		_ = tau.NewFindTool
+		_ = tau.NewLSTool
+
+		// Direct provider constructors + auth resolvers.
+		_ = tau.NewAnthropicProvider
+		_ = tau.NewOpenAIProvider
+		_ = tau.ResolveAnthropicAuth
+		_ = tau.ResolveOpenAIAuth
+
+		// Slash: same-body alias of DefaultSlashRegistry.
+		_ = tau.DefaultRegistry
+	)
+
+	// The Runtime() escape-hatch method exists on *AgentSession. Assert
+	// it via a typed nil pointer; the method itself is nil-safe per its
+	// spec.
+	var session *tau.AgentSession
+	if rt := session.Runtime(); rt != nil {
+		t.Errorf("nil (*AgentSession).Runtime() = %v, want nil", rt)
+	}
+}
+
 // TestExternalModule_CanRegisterCustomCommand proves an external Go
 // module that declares a type implementing tau.Command can hand it to
 // tau.Registry.Register without a compile-time or runtime error. This

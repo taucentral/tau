@@ -295,6 +295,36 @@
 //
 // Reference: docs/input/context/plugin-support/whitepaper.md §3.3.
 //
+// # tau-cli seam (split-tui-into-tau-cli)
+//
+// The tau binary lives in a separate module (github.com/taucentral/tau-cli)
+// and depends on this SDK plus the pkg/tau/modes subpackage. To make that
+// split possible without the binary reaching into internal/, the SDK widens
+// with a small set of additional aliases and wrappers documented here.
+//
+// Runtime escape hatch. The SDK *AgentSession wraps both the internal
+// session and its runtime; the Runtime() method returns the underlying
+// *AgentSessionRuntime so embedders that need fields the SDK does not
+// re-export individually (the TUI reads Options.Settings, ConfigDir,
+// EventBus, Session) can reach them without importing internal/agent.
+// Callers that use Runtime() accept responsibility for tracking future
+// changes to the runtime's field set; the SDK's stability promise covers
+// the alias type *AgentSessionRuntime, not its individual fields.
+//
+// Provider constructors: registry vs direct. The SDK exposes two distinct
+// provider constructor paths. NewAnthropicClient / NewOpenAIClient (the
+// pre-existing wrappers) route through the provider registry and serve
+// embedders that want runtime provider swap. NewAnthropicProvider /
+// NewOpenAIProvider (added by the split) call anthropic.New / openai.New
+// directly and serve embedders that know the provider at wire time. Both
+// paths exist; pick the one matching your wiring style.
+//
+// Faux providers. NewFauxProvider(responses ...string) takes explicit
+// response strings and ignores the TAU_FAUX_SCRIPT environment variable.
+// NewFauxProviderFromEnv() reads TAU_FAUX_SCRIPT (falling back to
+// fauxprovider.DefaultResponse) and is the variant e2e test harnesses
+// should use to script responses.
+//
 // # Versioning
 //
 // The SDK follows the Go module version drawn from go.mod. The v1.0
