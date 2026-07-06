@@ -38,13 +38,10 @@ make tidy          # go mod tidy
 
 ```
 tau/
-├── internal/       agent, llm, state, compaction, tools, plugins, slash,
-│                   config, prompts, util, proto
+├── internal/       agent, compaction, config, fauxprovider, llm, orchestrator,
+│                   plugins, prompts, proto, slash, state, storage, tools
 ├── pkg/tau/        public SDK (aliases + constructors)
 │   └── modes/      print / rpc run-mode handlers (interactive mode lives in tau-cli)
-├── examples/       sdk-embed, plugin-git reference programs
-└── test/           integration + e2e tests
+├── examples/       plugin-git, sdk-abac, sdk-custom-provider, sdk-embed
+└── test/e2e/       agent-loop integration tests
 ```
-
-See the project root `CLAUDE.md` for conventions and
-`openspec/changes/initial/` for the design artifacts.
