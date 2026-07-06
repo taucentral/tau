@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // chatResponse is the top-level shape of a non-streaming OpenAI response.

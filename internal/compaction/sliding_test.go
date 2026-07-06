@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 func TestArchive_WritesCompactionEntry(t *testing.T) {

@@ -17,8 +17,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	tauproto "github.com/coevin/tau/internal/proto"
-	"github.com/coevin/tau/internal/tools"
+	tauproto "github.com/taucentral/tau/internal/proto"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // buildMinimalPlugin builds the testdata minimal plugin binary to a

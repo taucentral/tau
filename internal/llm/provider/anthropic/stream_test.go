@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // feedEvents parses a sequence of SSE event blocks (as they'd appear on the

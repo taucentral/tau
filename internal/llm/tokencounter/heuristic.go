@@ -4,7 +4,7 @@ import (
 	"math"
 	"unicode"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // HeuristicCounter is a fast, network-free token estimator used as the

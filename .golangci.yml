@@ -118,7 +118,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/coevin/tau
+        - github.com/taucentral/tau
   exclusions:
     generated: lax
     paths:

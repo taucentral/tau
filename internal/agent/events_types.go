@@ -14,8 +14,8 @@ package agent
 import (
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // Topic is the routing key for an Event. Subscribers select zero or

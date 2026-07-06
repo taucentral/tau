@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 func TestUnmarshalResponse_TextOnly(t *testing.T) {

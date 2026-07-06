@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // fakeReadOps is an in-memory ReadOperations for unit tests.

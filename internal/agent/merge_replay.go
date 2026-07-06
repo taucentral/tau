@@ -34,9 +34,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coevin/tau/internal/compaction"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/compaction"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // writeToolSet is the lowercase lookup set of tool names that mutate

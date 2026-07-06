@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 func TestMaybeSetup_NoSetupFlag_Skips(t *testing.T) {

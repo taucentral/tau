@@ -25,14 +25,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/fauxprovider"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/llm/provider/anthropic"
-	"github.com/coevin/tau/internal/llm/provider/openai"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/fauxprovider"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm/provider/anthropic"
+	"github.com/taucentral/tau/internal/llm/provider/openai"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // fauxModelID is the canonical identifier for the built-in faux provider.

@@ -34,11 +34,11 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // scriptedClient emits a scripted stream of deltas per Stream call.

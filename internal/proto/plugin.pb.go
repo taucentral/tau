@@ -912,7 +912,7 @@ const file_internal_proto_plugin_proto_rawDesc = "" +
 	"\x04Host\x12(\n" +
 	"\x03Log\x12\x12.tau.v1.LogRequest\x1a\r.tau.v1.Empty\x12.\n" +
 	"\x06Notify\x12\x15.tau.v1.NotifyRequest\x1a\r.tau.v1.Empty\x12@\n" +
-	"\tGetConfig\x12\x18.tau.v1.GetConfigRequest\x1a\x19.tau.v1.GetConfigResponseB0Z.github.com/coevin/tau/internal/proto;taupluginb\x06proto3"
+	"\tGetConfig\x12\x18.tau.v1.GetConfigRequest\x1a\x19.tau.v1.GetConfigResponseB4Z2github.com/taucentral/tau/internal/proto;taupluginb\x06proto3"
 
 var (
 	file_internal_proto_plugin_proto_rawDescOnce sync.Once

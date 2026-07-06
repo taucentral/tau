@@ -49,8 +49,8 @@ package tau
 import (
 	"context"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/orchestrator"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/orchestrator"
 )
 
 // Orchestrator drives multi-session workflows in the agent's own

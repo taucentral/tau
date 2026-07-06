@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // withConfigDir overrides TAU_CONFIG_DIR for the duration of a test so

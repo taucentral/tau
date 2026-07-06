@@ -1,7 +1,7 @@
 # sdk-embed
 
 A minimal program that embeds the tau agent via the public SDK
-(`github.com/coevin/tau/pkg/tau`). It wires the built-in faux provider
+(`github.com/taucentral/tau/pkg/tau`). It wires the built-in faux provider
 (no network access), constructs an `AgentSession` with the built-in tool
 set, prints every event the session emits, and runs a single turn.
 

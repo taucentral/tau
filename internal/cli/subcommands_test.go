@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 func TestRunConfigSubcommand_Path(t *testing.T) {

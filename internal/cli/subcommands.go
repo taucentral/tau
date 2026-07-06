@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 // builtinModels is the static list of well-known provider models merged

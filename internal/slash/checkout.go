@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/coevin/tau/internal/agent"
+	"github.com/taucentral/tau/internal/agent"
 )
 
 type checkoutCommand struct{}

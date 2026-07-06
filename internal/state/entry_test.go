@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 func TestNewEntry_DerivesKindFromPayload(t *testing.T) {

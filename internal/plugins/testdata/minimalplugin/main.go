@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/coevin/tau/internal/plugins"
-	tauproto "github.com/coevin/tau/internal/proto"
+	"github.com/taucentral/tau/internal/plugins"
+	tauproto "github.com/taucentral/tau/internal/proto"
 )
 
 // echoServer implements proto.PluginServer. Handshake returns the host

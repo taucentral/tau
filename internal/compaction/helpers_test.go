@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/llm/tokencounter"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm/tokencounter"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // nowAt returns a fixed base time advanced by the given offset; useful for

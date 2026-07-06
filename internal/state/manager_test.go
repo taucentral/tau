@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // withConfigDir points TAU_CONFIG_DIR at a temp dir for the duration of

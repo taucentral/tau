@@ -21,7 +21,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // FauxProvider is a deterministic LLMClient for end-to-end agent tests.

@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/coevin/tau/internal/agent"
+	"github.com/taucentral/tau/internal/agent"
 )
 
 type treeCommand struct{}

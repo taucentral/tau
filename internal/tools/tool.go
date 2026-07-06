@@ -17,7 +17,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // HeadlessTool is the functional contract for a tool: the methods an

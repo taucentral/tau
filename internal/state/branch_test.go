@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // newBranchOnBolt sets up a parent boltManager (with a couple of messages)

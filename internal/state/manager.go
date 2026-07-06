@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // Context is the output of BuildContext: a list of messages ready to send

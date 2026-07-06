@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	tauproto "github.com/coevin/tau/internal/proto"
+	tauproto "github.com/taucentral/tau/internal/proto"
 )
 
 // HostServer implements the proto Host service that the host exposes to

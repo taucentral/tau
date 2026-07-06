@@ -22,7 +22,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 
-	tauproto "github.com/coevin/tau/internal/proto"
+	tauproto "github.com/taucentral/tau/internal/proto"
 )
 
 // ProtocolVersion is the wire-protocol version this host build expects.

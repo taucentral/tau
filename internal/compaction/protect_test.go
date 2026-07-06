@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 func TestProtectionList_Empty(t *testing.T) {

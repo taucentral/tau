@@ -20,7 +20,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // headlessOnly implements HeadlessTool and deliberately does NOT satisfy

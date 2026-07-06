@@ -239,7 +239,7 @@ from an internal facade to a frozen v1.0 surface.
 - **Examples** — `examples/sdk-embed/` is a minimal construct →
   subscribe → run → shutdown program. `examples/sdk-custom-provider/`
   registers a custom LLM provider via the registry and runs a single
-  turn. Both import only `github.com/coevin/tau/pkg/tau`.
+  turn. Both import only `github.com/taucentral/tau/pkg/tau`.
 - **Documentation** — `pkg/tau/doc.go` rewritten as a complete
   package overview with sections for Lifecycle, Concurrency, Errors,
   Versioning. `docs/sdk/cookbook.md` covers six runnable patterns

@@ -1,9 +1,9 @@
 package compaction
 
 import (
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/llm/tokencounter"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm/tokencounter"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // NoCutNeeded signals that the walk fits within the target budget and no

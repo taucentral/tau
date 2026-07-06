@@ -16,11 +16,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/slash"
-	"github.com/coevin/tau/internal/tui/components"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/slash"
+	"github.com/taucentral/tau/internal/tui/components"
 )
 
 // AppOptions configures AppModel construction.

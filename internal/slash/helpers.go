@@ -4,9 +4,9 @@ package slash
 import (
 	"errors"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // summarizerClient returns the LLM client the slash command should pass

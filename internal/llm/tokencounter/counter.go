@@ -12,7 +12,7 @@
 // delta; this package exists so callers can budget before a request is sent.
 package tokencounter
 
-import "github.com/coevin/tau/internal/llm"
+import "github.com/taucentral/tau/internal/llm"
 
 // TokenCounter counts tokens for a given model.
 //

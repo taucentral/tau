@@ -31,10 +31,10 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/fauxprovider"
-	"github.com/coevin/tau/internal/slash"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/fauxprovider"
+	"github.com/taucentral/tau/internal/slash"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // contractOpts returns an Options bundle populated with every field set

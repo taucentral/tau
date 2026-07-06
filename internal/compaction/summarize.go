@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // summarizationMaxTokens is the output cap passed to the LLM when generating

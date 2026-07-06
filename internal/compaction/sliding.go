@@ -3,7 +3,7 @@ package compaction
 import (
 	"fmt"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // SlidingResult describes the Compaction entry written by Archive.

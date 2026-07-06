@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 func TestHeuristic_Basic(t *testing.T) {

@@ -24,7 +24,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // ProviderOptions is the SDK-level bundle passed to a ProviderFactory.

@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/llm/tokencounter"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm/tokencounter"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // stubLLMClient is a minimal LLMClient for runtime wiring tests. It does

@@ -23,7 +23,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // streamParser translates Anthropic SSE events into llm.Delta values.

@@ -23,7 +23,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/coevin/tau/pkg/tau"
+	"github.com/taucentral/tau/pkg/tau"
 )
 
 // AuditEntry is the on-disk audit record (per the cookbook recipe).

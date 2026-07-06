@@ -22,8 +22,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // ProviderID is the canonical name for this provider.

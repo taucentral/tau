@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // branchManager shares the parent Manager's READ-side store and maintains a

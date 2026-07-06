@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coevin/tau/internal/agent"
+	"github.com/taucentral/tau/internal/agent"
 )
 
 // Command is the interface every slash command implements. Execute

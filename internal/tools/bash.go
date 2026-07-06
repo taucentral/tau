@@ -17,7 +17,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // BashExecOptions controls the runtime behavior of a BashOperations.Exec

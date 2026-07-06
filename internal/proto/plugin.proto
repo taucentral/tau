@@ -14,7 +14,7 @@ syntax = "proto3";
 
 package tau.v1;
 
-option go_package = "github.com/coevin/tau/internal/proto;tauplugin";
+option go_package = "github.com/taucentral/tau/internal/proto;tauplugin";
 
 // ProtocolVersion is the single source of truth for the wire-format version
 // of the plugin protocol. It is announced by the plugin in its Handshake

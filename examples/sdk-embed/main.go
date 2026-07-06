@@ -20,7 +20,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/coevin/tau/pkg/tau"
+	"github.com/taucentral/tau/pkg/tau"
 )
 
 func main() {

@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // DefaultFileReadTools names the tools treated as file reads for protection

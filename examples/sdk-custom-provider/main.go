@@ -9,7 +9,7 @@
 //	go run ./examples/sdk-custom-provider
 //
 // The example does NOT import any internal/ package; everything is wired
-// through the public SDK surface at github.com/coevin/tau/pkg/tau.
+// through the public SDK surface at github.com/taucentral/tau/pkg/tau.
 package main
 
 import (
@@ -21,7 +21,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/coevin/tau/pkg/tau"
+	"github.com/taucentral/tau/pkg/tau"
 )
 
 func main() {

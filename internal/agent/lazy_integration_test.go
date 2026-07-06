@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/tools"
 	"github.com/invopop/jsonschema"
 )
 

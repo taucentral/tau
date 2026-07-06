@@ -19,11 +19,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/coevin/tau/internal/compaction"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/storage"
+	"github.com/taucentral/tau/internal/compaction"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/storage"
 )
 
 // CommandSession is the session-shaped surface a slash command (built-in

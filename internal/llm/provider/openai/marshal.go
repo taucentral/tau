@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // DefaultBaseURL is the production OpenAI endpoint.

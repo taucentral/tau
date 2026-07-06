@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // ErrUnknownTool is returned by Lookup when no tool with the given name is

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 func TestClearCommand_Name(t *testing.T) {

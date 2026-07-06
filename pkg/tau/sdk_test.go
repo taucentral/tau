@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/fauxprovider"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/fauxprovider"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // newTestOptions returns an Options bundle wired against the faux

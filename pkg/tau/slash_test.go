@@ -21,9 +21,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/fauxprovider"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/fauxprovider"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 func basicSlashOpts(t *testing.T) Options {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 func TestExtractFileTracking_ReadAndModify(t *testing.T) {

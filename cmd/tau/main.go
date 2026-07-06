@@ -25,7 +25,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/coevin/tau/internal/cli"
+	"github.com/taucentral/tau/internal/cli"
 )
 
 // version is the binary version. It is overridden at build time via -ldflags.

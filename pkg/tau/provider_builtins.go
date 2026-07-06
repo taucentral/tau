@@ -26,8 +26,8 @@
 package tau
 
 import (
-	"github.com/coevin/tau/internal/llm/provider/anthropic"
-	"github.com/coevin/tau/internal/llm/provider/openai"
+	"github.com/taucentral/tau/internal/llm/provider/anthropic"
+	"github.com/taucentral/tau/internal/llm/provider/openai"
 )
 
 func init() {

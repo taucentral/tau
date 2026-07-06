@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 func TestDefaultKeybindings_AllActionsPresent(t *testing.T) {

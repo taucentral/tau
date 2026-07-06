@@ -33,8 +33,8 @@ lint:
 # proto: regenerate *.pb.go from internal/proto/plugin.proto
 proto:
 	protoc \
-		--go_out=. --go_opt=module=github.com/coevin/tau \
-		--go-grpc_out=. --go-grpc_opt=module=github.com/coevin/tau \
+		--go_out=. --go_opt=module=github.com/taucentral/tau \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/taucentral/tau \
 		internal/proto/plugin.proto
 
 # install: install the binary to $GOBIN
@@ -52,7 +52,7 @@ tidy:
 # fmt + vet: standalone formatters
 fmt:
 	gofmt -s -w .
-	goimports -w -local github.com/coevin/tau .
+	goimports -w -local github.com/taucentral/tau .
 
 vet:
 	go vet ./...

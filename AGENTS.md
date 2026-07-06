@@ -6,7 +6,7 @@ This file is a short pointer for AI agents working inside the Go module
 
 ## What's here
 
-`tau/` is the Go module root (`module github.com/coevin/tau`, Go 1.25+).
+`tau/` is the Go module root (`module github.com/taucentral/tau`, Go 1.25+).
 The interesting subdirectories:
 
 | Path | What |

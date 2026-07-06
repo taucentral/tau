@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/coevin/tau/internal/llm/tokencounter"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/llm/tokencounter"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // DefaultReserveTokens is the per-turn token reserve applied when

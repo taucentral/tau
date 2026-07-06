@@ -8,7 +8,7 @@ import (
 
 	tiktoken "github.com/pkoukk/tiktoken-go"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // modelPrefixRegistry maps a lowercased model prefix to the tiktoken

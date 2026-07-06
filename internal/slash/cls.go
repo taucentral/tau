@@ -12,7 +12,7 @@ package slash
 import (
 	"context"
 
-	"github.com/coevin/tau/internal/agent"
+	"github.com/taucentral/tau/internal/agent"
 )
 
 type clsCommand struct{}

@@ -45,9 +45,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // AgentSession pairs a wired AgentSessionRuntime with turn-tracking

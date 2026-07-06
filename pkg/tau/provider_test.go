@@ -24,8 +24,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // fauxLLMClient is the minimal llm.LLMClient implementation used as a

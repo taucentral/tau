@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // newLazyManager creates a lazyManager under an isolated config dir and

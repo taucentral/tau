@@ -11,7 +11,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // ReadOperations abstracts the I/O surface of the read tool. The default

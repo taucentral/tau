@@ -32,7 +32,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/coevin/tau/internal/agent"
+	"github.com/taucentral/tau/internal/agent"
 )
 
 // ConflictReport is a type alias for agent.ConflictReportShell so the

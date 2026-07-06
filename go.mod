@@ -1,4 +1,4 @@
-module github.com/coevin/tau
+module github.com/taucentral/tau
 
 go 1.25.0
 

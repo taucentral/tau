@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 func TestClient_DefaultResponse(t *testing.T) {

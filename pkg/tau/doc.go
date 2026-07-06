@@ -22,7 +22,7 @@
 //		"fmt"
 //		"log"
 //
-//		"github.com/coevin/tau/pkg/tau"
+//		"github.com/taucentral/tau/pkg/tau"
 //	)
 //
 //	func main() {

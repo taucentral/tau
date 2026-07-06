@@ -37,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // ErrNoOrchestrator is returned by Spawn and MergeState when the

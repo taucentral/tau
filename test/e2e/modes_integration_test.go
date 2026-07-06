@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/cli"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/fauxprovider"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/modes"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/cli"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/fauxprovider"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/modes"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // --- 9.7: tau --print --model faux "hello" ---

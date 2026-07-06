@@ -13,9 +13,9 @@ import (
 	"github.com/invopop/jsonschema"
 	"google.golang.org/grpc"
 
-	"github.com/coevin/tau/internal/llm"
-	tauproto "github.com/coevin/tau/internal/proto"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	tauproto "github.com/taucentral/tau/internal/proto"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // GRPCPlugin is the bridge between go-plugin's plugin.Plugin interface and

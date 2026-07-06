@@ -19,7 +19,7 @@
 package tau
 
 import (
-	"github.com/coevin/tau/internal/storage"
+	"github.com/taucentral/tau/internal/storage"
 )
 
 // Entry is a single unit of stored context. The ID is the only field

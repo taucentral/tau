@@ -37,12 +37,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coevin/tau/internal/compaction"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/llm/tokencounter"
-	"github.com/coevin/tau/internal/prompts"
-	"github.com/coevin/tau/internal/state"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/compaction"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/llm/tokencounter"
+	"github.com/taucentral/tau/internal/prompts"
+	"github.com/taucentral/tau/internal/state"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // AgentSessionRuntime is the wired bundle: every component the turn loop

@@ -30,7 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 // setupAnswers captures the user's responses to the wizard prompts. Empty

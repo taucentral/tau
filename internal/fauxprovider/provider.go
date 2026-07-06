@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // DefaultResponse is the canned message returned when TAU_FAUX_SCRIPT is

@@ -12,7 +12,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // fakeTool is a minimal Tool for testing the Registry.

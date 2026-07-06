@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/coevin/tau/internal/modes"
+	"github.com/taucentral/tau/internal/modes"
 )
 
 // ErrNotImplemented is returned by Dispatch for functionality that the parser

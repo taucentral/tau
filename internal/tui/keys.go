@@ -29,7 +29,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coevin/tau/internal/config"
+	"github.com/taucentral/tau/internal/config"
 )
 
 // Action identifiers. These are the canonical names used in

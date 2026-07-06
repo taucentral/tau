@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	tauproto "github.com/coevin/tau/internal/proto"
-	"github.com/coevin/tau/internal/tools"
+	tauproto "github.com/taucentral/tau/internal/proto"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // PluginPrefix is the executable-name prefix the spec requires for

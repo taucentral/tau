@@ -22,8 +22,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/state"
 )
 
 type clearCommand struct{}

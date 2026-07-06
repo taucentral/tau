@@ -31,8 +31,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/coevin/tau/internal/plugins"
-	tauproto "github.com/coevin/tau/internal/proto"
+	"github.com/taucentral/tau/internal/plugins"
+	tauproto "github.com/taucentral/tau/internal/proto"
 )
 
 // ExitNoCookie is the exit code when the magic cookie is missing. The

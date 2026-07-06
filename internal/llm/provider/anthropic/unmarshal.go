@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // wireResponse is the top-level shape of an Anthropic /v1/messages response

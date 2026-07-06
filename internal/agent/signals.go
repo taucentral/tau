@@ -12,8 +12,8 @@ package agent
 import (
 	"sort"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // buildTurnSignals assembles a tools.TurnSignals value from the

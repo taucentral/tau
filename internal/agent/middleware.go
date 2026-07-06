@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/tools"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/tools"
 )
 
 // runtimeRequestMutator is the runtime-side interface for an

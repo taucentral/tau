@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // inMemoryManager is the no-persistence Manager: all entries live in a

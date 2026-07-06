@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // lazyManager wraps a buffer plus an eventual boltManager. It implements

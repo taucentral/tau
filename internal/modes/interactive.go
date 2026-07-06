@@ -21,8 +21,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/tui"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/tui"
 )
 
 // InteractiveOptions is the input bundle for RunInteractive. Stdin,

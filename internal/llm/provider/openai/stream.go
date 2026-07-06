@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // streamParser translates OpenAI SSE events into llm.Delta values.

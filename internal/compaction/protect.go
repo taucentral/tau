@@ -3,7 +3,7 @@ package compaction
 import (
 	"sort"
 
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // DefaultMaxRecentFileReads is the cap on distinct file paths whose most-recent

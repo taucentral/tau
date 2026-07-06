@@ -1,9 +1,9 @@
 // Package contract hosts the SDK contract test for tau's public slash-
 // command surface. It is deliberately an "external-shaped" package: it
-// imports ONLY github.com/coevin/tau (the SDK facade) and the standard
+// imports ONLY github.com/taucentral/tau (the SDK facade) and the standard
 // library. It MUST NOT import any path under internal/. If it does, the
 // contract is broken and the test fails to compile in any external
-// module that depends on github.com/coevin/tau.
+// module that depends on github.com/taucentral/tau.
 //
 // The contract test proves three things:
 //
@@ -30,7 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	tau "github.com/coevin/tau/pkg/tau"
+	tau "github.com/taucentral/tau/pkg/tau"
 )
 
 // echoCommand is a custom tau.Command that records its args and returns
@@ -93,7 +93,7 @@ func TestExternalModule_CanNamePublicTypes(t *testing.T) {
 // module that declares a type implementing tau.Command can hand it to
 // tau.Registry.Register without a compile-time or runtime error. This
 // is the seam the add-sdd-plugin change needs: it lives at
-// github.com/coevin/tau-plugins/sdd and must register /propose,
+// github.com/taucentral/sdd and must register /propose,
 // /explore, /apply, /archive as slash commands.
 func TestExternalModule_CanRegisterCustomCommand(t *testing.T) {
 	reg := tau.NewRegistry()

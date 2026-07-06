@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // writeFile is a small helper for tests: writes content to path,

@@ -39,9 +39,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/llm"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/llm"
+	"github.com/taucentral/tau/internal/state"
 )
 
 // RPCOptions is the input bundle for RunRPC. Stdin/Stdout/Stderr default

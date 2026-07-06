@@ -7,7 +7,7 @@
 // alias keeps the public surface stable.
 package tui
 
-import "github.com/coevin/tau/internal/tui/components"
+import "github.com/taucentral/tau/internal/tui/components"
 
 // Theme is an alias for components.Theme so callers can refer to the
 // type as tui.Theme without importing the components package directly.

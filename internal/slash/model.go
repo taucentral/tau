@@ -27,9 +27,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coevin/tau/internal/agent"
-	"github.com/coevin/tau/internal/config"
-	"github.com/coevin/tau/internal/state"
+	"github.com/taucentral/tau/internal/agent"
+	"github.com/taucentral/tau/internal/config"
+	"github.com/taucentral/tau/internal/state"
 )
 
 type modelCommand struct{}

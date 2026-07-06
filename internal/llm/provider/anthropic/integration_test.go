@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coevin/tau/internal/llm"
+	"github.com/taucentral/tau/internal/llm"
 )
 
 // TestIntegration_ToolResultFlow verifies a multi-turn request containing a
