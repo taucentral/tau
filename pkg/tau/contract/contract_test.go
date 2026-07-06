@@ -210,12 +210,30 @@ func TestExternalModule_CanNameTauCLISplitSymbols(t *testing.T) {
 		_ = tau.DefaultRegistry
 	)
 
+	// ThinkingLevel constants are exported with their canonical names.
+	const (
+		_ tau.ThinkingLevel = tau.ThinkingOff
+		_ tau.ThinkingLevel = tau.ThinkingMinimal
+		_ tau.ThinkingLevel = tau.ThinkingLow
+		_ tau.ThinkingLevel = tau.ThinkingMedium
+		_ tau.ThinkingLevel = tau.ThinkingHigh
+		_ tau.ThinkingLevel = tau.ThinkingXHigh
+	)
+
 	// The Runtime() escape-hatch method exists on *AgentSession. Assert
 	// it via a typed nil pointer; the method itself is nil-safe per its
 	// spec.
 	var session *tau.AgentSession
 	if rt := session.Runtime(); rt != nil {
 		t.Errorf("nil (*AgentSession).Runtime() = %v, want nil", rt)
+	}
+
+	// AsCommandSession exists on *AgentSession. Compile-time check via
+	// a method-value capture; we don't invoke it (it would dereference
+	// nil) — the reference alone proves the method is wired on the SDK
+	// wrapper type.
+	if false {
+		_ = (*tau.AgentSession).AsCommandSession
 	}
 }
 

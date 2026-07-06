@@ -1200,7 +1200,30 @@ func (s *AgentSession) Runtime() *AgentSessionRuntime {
 	return s.rt
 }
 
+// AsCommandSession returns a CommandSession view over the session, ready
+// to pass to slash.Registry.Execute. Built-in slash commands and external
+// plugins receive this view; it exposes the wired runtime without
+// leaking the concrete *AgentSession type to external packages.
+//
+// The returned CommandSession is the SDK alias of agent.CommandSession,
+// so callers that mix tau and agent types transparently see the same
+// value.
+func (s *AgentSession) AsCommandSession() CommandSession {
+	return s.sess.AsCommandSession()
+}
+
 // --- Config surface (aliases + helpers) -------------------------------------
+
+// ThinkingLevel constants. Used by Settings.DefaultThinkingLevel,
+// SessionOptions.ThinkingLevel, and the --thinking flag.
+const (
+	ThinkingOff     = config.ThinkingOff
+	ThinkingMinimal = config.ThinkingMinimal
+	ThinkingLow     = config.ThinkingLow
+	ThinkingMedium  = config.ThinkingMedium
+	ThinkingHigh    = config.ThinkingHigh
+	ThinkingXHigh   = config.ThinkingXHigh
+)
 
 // Keybinding is the keyboard shortcut definition inside Settings.Keybindings.
 type Keybinding = config.Keybinding
