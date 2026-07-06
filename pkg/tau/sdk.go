@@ -85,6 +85,22 @@ const (
 	StopReasonAborted = llm.StopReasonAborted
 )
 
+// Role identifiers re-exported from llm so embedders building their own
+// message-rendering layer can name assistant vs user without importing
+// internal/llm.
+const (
+	RoleUser      = llm.RoleUser
+	RoleAssistant = llm.RoleAssistant
+)
+
+// LLMToolResult is the content-block variant of a tool result embedded in
+// an LLM message stream. It is structurally distinct from the SDK's
+// ToolResult alias (which mirrors tools.ToolResult, the value a Tool's
+// Execute method returns); this naming reflects that distinction. The
+// agent loop wraps every tools.ToolResult in an llm.ToolResult before
+// adding it to the message history.
+type LLMToolResult = llm.ToolResult
+
 // Usage reports per-turn token accounting.
 type Usage = llm.Usage
 
