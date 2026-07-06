@@ -1,27 +1,26 @@
 # tau
 
-`tau` is a native Go coding agent — a single-binary, process-isolated, tree-state
-port of the [`pi`](https://github.com/earendil-works/pi) TypeScript coding agent.
+`tau` is a native Go coding-agent SDK — a library-only port of the
+[`pi`](https://github.com/earendil-works/pi) TypeScript coding agent.
+
+The canonical `tau` binary lives in a separate module,
+[`github.com/taucentral/tau-cli`](https://github.com/taucentral/tau-cli). This
+repo exists for embedders who want the agent loop, state tree, plugin layer,
+and LLM client surface without paying for the TUI's transitive
+`charmbracelet/*` dependency footprint.
 
 It implements four subsystems:
 
 - **Plugin layer** (`hashicorp/go-plugin` over gRPC) — process-isolated tools.
 - **State tree** (`bbolt`) — conversation history as a navigable DAG.
 - **Unified LLM client** — Anthropic Messages + OpenAI Chat Completions providers.
-- **TUI** (`charmbracelet/bubbletea`) — split-pane interactive interface.
-
-## Build & run
-
-```sh
-cd tau
-make build         # produces ./bin/tau (static binary, CGO disabled)
-make run           # build + run
-./bin/tau --help
-```
+- **Public SDK** (`pkg/tau`) — type aliases + constructors that external
+  modules can import without reaching into `internal/`.
 
 ## Test
 
 ```sh
+cd tau
 make test          # unit + integration tests
 make e2e           # end-to-end tests (may need TAU_RUN_E2E=1)
 ```
@@ -39,11 +38,11 @@ make tidy          # go mod tidy
 
 ```
 tau/
-├── cmd/tau/        binary entrypoint
-├── internal/       agent, llm, state, compaction, tools, plugins, tui, modes,
-│                   cli, slash, config, prompts, util, proto
-├── pkg/tau/        public SDK
-├── examples/       reference plugin
+├── internal/       agent, llm, state, compaction, tools, plugins, slash,
+│                   config, prompts, util, proto
+├── pkg/tau/        public SDK (aliases + constructors)
+│   └── modes/      print / rpc run-mode handlers (interactive mode lives in tau-cli)
+├── examples/       sdk-embed, plugin-git reference programs
 └── test/           integration + e2e tests
 ```
 

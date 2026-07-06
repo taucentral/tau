@@ -7,12 +7,12 @@ This file is a short pointer for AI agents working inside the Go module
 ## What's here
 
 `tau/` is the Go module root (`module github.com/taucentral/tau`, Go 1.25+).
+It is **library-only** — the canonical `tau` binary lives in the separate
+module [`github.com/taucentral/tau-cli`](https://github.com/taucentral/tau-cli).
 The interesting subdirectories:
 
 | Path | What |
 |---|---|
-| `cmd/tau/` | main entry point |
-| `internal/cli/` | argv parsing, TTY detection, dispatch to run modes |
 | `internal/config/` | Settings/Paths/Auth/Trust/Models/Resolve primitives |
 | `internal/llm/` | provider-agnostic client layer (anthropic, openai, faux) |
 | `internal/tools/` | Tool interface, Registry, built-ins |
@@ -22,18 +22,20 @@ The interesting subdirectories:
 | `internal/plugins/` | go-plugin Manager (subprocess lifecycle) |
 | `internal/agent/` | AgentSession, AgentSessionRuntime, EventBus |
 | `internal/slash/` | Registry of slash commands |
-| `internal/tui/` | bubbletea AppModel + components (split-pane layout) |
-| `internal/modes/` | interactive / print / rpc run-mode handlers |
 | `pkg/tau/` | public SDK (CreateAgentSession + re-exported types) |
+| `pkg/tau/modes/` | print / rpc run-mode handlers (interactive mode lives in tau-cli) |
 | `examples/` | sdk-embed, plugin-git reference programs |
-| `test/e2e/` | end-to-end test harness |
+| `test/e2e/` | end-to-end test harness (agent loop; no CLI wiring) |
 
 ## Go-specific notes
 
-- **No CGO.** Pure Go. `ldd bin/tau` must report "not a dynamic executable".
+- **No CGO.** Pure Go.
 - **Go 1.25 toolchain** declared in go.mod. Don't downgrade.
-- **Direct deps only** for things the binary actually needs. The Go module
-  graph is otherwise pruned. See `go.mod` for the canonical list.
+- **No charmbracelet/* direct deps.** The TUI moved to tau-cli; this module
+  is embedder-friendly. The only `mattn/go-*` indirects that remain are
+  pulled in transitively via `hashicorp/go-plugin` → `hashicorp/go-hclog`.
+- **Direct deps only** for things the library actually needs. See `go.mod`
+  for the canonical list.
 - **Tests are part of done.** Use table-driven form with `t.Run` subtests.
   Every helper that allocates a resource registers `t.Cleanup`.
 - **Race detector is mandatory.** The verification gate runs
