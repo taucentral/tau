@@ -30,35 +30,69 @@ import (
 // The split exists because go-plugin's net/rpc and gRPC subtypes want one
 // factory per "plugin name", but the host and plugin processes occupy
 // opposite ends of the same wire.
+//
+// Host→plugin RPCs (Plugin.ListTools, Plugin.Execute, etc.) travel over
+// the main gRPC connection that go-plugin establishes. Plugin→host RPCs
+// (Host.Log, Host.Notify, Host.GetConfig) travel over a separate gRPC
+// stream negotiated through go-plugin's GRPCBroker at the well-known
+// HostServiceBrokerID. The host registers the Host service via
+// AcceptAndServe from GRPCClient; the plugin dials it from
+// PluginAdapter.HostClient().
 type GRPCPlugin struct {
 	plugin.NetRPCUnsupportedPlugin
 
 	// ServerImpl is the proto.PluginServer the plugin process exposes.
 	// nil on the host side.
 	ServerImpl tauproto.PluginServer
+
+	// HostServer is the host-side Host service implementation. The host
+	// populates this so GRPCClient can register it on the broker for
+	// plugin→host callbacks. nil on the plugin side.
+	HostServer tauproto.HostServer
+
+	// Adapter is the plugin-side PluginAdapter that wants its
+	// HostClient populated when GRPCServer captures the broker. nil on
+	// the host side.
+	Adapter *PluginAdapter
 }
 
 // GRPCServer is called by go-plugin on the plugin process to register the
-// gRPC service. Host side never calls this.
-func (p *GRPCPlugin) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
+// gRPC service. Host side never calls this. The broker is captured on the
+// Adapter so PluginAdapter.HostClient() can dial the host's Host service
+// lazily on first use.
+func (p *GRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	if p.ServerImpl == nil {
 		return errors.New("plugins: GRPCPlugin has no ServerImpl; cannot serve")
 	}
 	tauproto.RegisterPluginServer(s, p.ServerImpl)
+	if p.Adapter != nil {
+		p.Adapter.setHostBroker(broker)
+	}
 	return nil
 }
 
 // GRPCClient is called by go-plugin on the host to wrap the dispensed
 // gRPC client. Plugin side never calls this. The returned value is what
 // HostClient.pluginClient holds.
-func (p *GRPCPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+//
+// When HostServer is non-nil, the broker accepts the well-known
+// HostServiceBrokerID and serves the Host service on it. The plugin
+// subprocess dials the same ID to reach Host.Log/Notify/GetConfig.
+func (p *GRPCPlugin) GRPCClient(_ context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
+	if p.HostServer != nil {
+		go broker.AcceptAndServe(HostServiceBrokerID, HostGRPCRegistrar(p.HostServer))
+	}
 	return tauproto.NewPluginClient(c), nil
 }
 
-// PluginMap is the host-side PluginMap. The plugin side builds its own
-// equivalent via NewPluginAdapter (server.go).
-var PluginMap = map[string]plugin.Plugin{
-	PluginName: &GRPCPlugin{},
+// HostPluginMap returns the host-side PluginMap for a spawn carrying the
+// supplied HostServer. Replaces the package-level PluginMap singleton so
+// each spawn can thread its own HostServer through the broker. The plugin
+// side builds its own equivalent via PluginAdapter.PluginMap.
+func HostPluginMap(hostServer tauproto.HostServer) map[string]plugin.Plugin {
+	return map[string]plugin.Plugin{
+		PluginName: &GRPCPlugin{HostServer: hostServer},
+	}
 }
 
 // PluginTool is the host-side tools.Tool implementation that routes

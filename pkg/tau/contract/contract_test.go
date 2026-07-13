@@ -144,6 +144,11 @@ func TestExternalModule_CanNameTauCLISplitSymbols(t *testing.T) {
 		// Provider direct-constructor option types.
 		_ tau.AnthropicProviderOptions
 		_ tau.OpenAIProviderOptions
+
+		// Plugin host-side types.
+		_ tau.HostServer
+		_ tau.ConfigSource
+		_ tau.ConfigSourceFunc
 	)
 
 	// Vars / consts re-exported from internal packages.
@@ -208,6 +213,12 @@ func TestExternalModule_CanNameTauCLISplitSymbols(t *testing.T) {
 
 		// Slash: same-body alias of DefaultSlashRegistry.
 		_ = tau.DefaultRegistry
+
+		// Plugin host-side constructors.
+		_ = tau.NoopHostServer
+		_ = tau.NewHostServer
+		_ = tau.NoopConfigSource
+		_ = tau.NewPluginManager
 	)
 
 	// ThinkingLevel constants are exported with their canonical names.

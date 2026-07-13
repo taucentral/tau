@@ -61,6 +61,18 @@ var HandshakeConfig = plugin.HandshakeConfig{
 // fixed name suffices.
 const PluginName = "tau"
 
+// HostServiceBrokerID is the well-known gRPC broker ID the host and
+// plugin agree on for the Host service (Log/Notify/GetConfig). The host
+// calls broker.AcceptAndServe(HostServiceBrokerID, ...) from
+// GRPCPlugin.GRPCClient; the plugin dials the same ID from its
+// PluginAdapter.HostClient() on first use.
+//
+// Well-known (rather than dynamically allocated) because the Host
+// service is exposed unconditionally on every spawn and the plugin
+// needs to reach it without a per-spawn handshake. Matches the pattern
+// Terraform's plugin SDK uses for host-side callbacks.
+const HostServiceBrokerID uint32 = 1
+
 // ErrProtocolMismatch is returned by Handshake when a plugin announces a
 // protocol version incompatible with this host's ProtocolVersion.
 type ErrProtocolMismatch struct {

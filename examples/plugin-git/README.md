@@ -25,10 +25,35 @@ The output is a single static binary named `tau-plugin-git` (append
 
 ## Install
 
-Drop the binary into tau's plugins directory. The file name **must**
-start with `tau-plugin-` so the host's discovery recognizes it.
+The file name **must** start with `tau-plugin-` so the host's discovery
+recognizes it. The preferred path is `tau plugin install`; the manual
+`cp + chmod` flow is kept for airgapped hosts and custom builds.
 
-### POSIX (Linux / macOS)
+### Preferred: `tau plugin install`
+
+Install the latest release from GitHub:
+
+```sh
+tau plugin install taucentral/plugin-git
+```
+
+Or pin to an explicit HTTPS URL:
+
+```sh
+tau plugin install https://github.com/taucentral/plugin-git/releases/latest/download/tau-plugin-git-linux-amd64
+```
+
+The command fetches the binary, verifies the sibling `.sha256`
+checksum when present, writes it under tau's global plugins directory,
+and records a pin in `settings.json` so `tau plugin list` / `update` /
+`remove` can trace it back to its source. Add `--yes` for non-interactive
+use (CI, install scripts).
+
+### Manual install (airgapped / custom builds)
+
+Drop the built binary into tau's plugins directory.
+
+#### POSIX (Linux / macOS)
 
 ```sh
 mkdir -p ~/.config/tau/plugins
@@ -36,12 +61,15 @@ cp tau-plugin-git ~/.config/tau/plugins/
 chmod +x ~/.config/tau/plugins/tau-plugin-git
 ```
 
-### Windows
+#### Windows
 
 ```cmd
 mkdir "%APPDATA%\tau\plugins"
 copy tau-plugin-git.exe "%APPDATA%\tau\plugins\"
 ```
+
+Binaries installed this way show up as `manual` under `tau plugin list`
+(no pin entry exists) and cannot be updated via `tau plugin update`.
 
 ### Project-local override
 
@@ -87,9 +115,8 @@ Run this sequence after building + installing the plugin:
 
 1. **Discovery**: Start tau in any directory. Verify the startup banner
    (or `--debug` log) reports `plugin-git` discovered and spawned.
-2. **Schema presence**: Run `tau --print-tools` (or the equivalent in
-   the runtime you have) and confirm `git.status` and `git.diff` appear
-   in the merged tool list.
+2. **Schema presence**: Run `tau --print-tools` and confirm `git.status`
+   and `git.diff` appear in the merged tool list.
 3. **`git.status` happy path**: Inside a git repo with at least one
    uncommitted file, run:
    ```sh

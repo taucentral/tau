@@ -145,7 +145,7 @@ func NewHostClient(cfg HostConfig) (*HostClient, error) {
 		return nil, errors.New("plugins: HostConfig.Path is required")
 	}
 	if cfg.HostServer == nil {
-		return nil, errors.New("plugins: HostConfig.HostServer is required (use NoopHostServer for tests)")
+		return nil, errors.New("plugins: HostConfig.HostServer is required (use tau.NoopHostServer() for tests)")
 	}
 	if cfg.StartTimeout == 0 {
 		cfg.StartTimeout = SpawnDefaultTimeout
@@ -209,7 +209,7 @@ func (h *HostClient) Spawn(ctx context.Context) error {
 	cmd.Env = append(commandEnv(), fmt.Sprintf("%s=%s", MagicCookieKey, MagicCookieValue))
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  HandshakeConfig,
-		Plugins:          PluginMap,
+		Plugins:          HostPluginMap(h.cfg.HostServer),
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Stderr:           h.cfg.Stderr,

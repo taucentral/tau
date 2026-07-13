@@ -67,6 +67,15 @@ func NoopConfigSource() ConfigSource {
 	return ConfigSourceFunc(func(string) (string, bool) { return "", false })
 }
 
+// NoopHostServer returns a HostServer that discards Log output, resolves
+// no config keys, and drops Notify calls. Satisfies NewManager's non-nil
+// HostServer requirement for embedders and tests that don't need
+// plugin→host callbacks. Equivalent to
+// NewHostServer(io.Discard, NoopConfigSource(), nil).
+func NoopHostServer() *HostServer {
+	return NewHostServer(io.Discard, NoopConfigSource(), nil)
+}
+
 // NewHostServer constructs a HostServer. nil ConfigSource becomes
 // NoopConfigSource; nil NotifyHandler is a no-op.
 func NewHostServer(logWriter io.Writer, cfg ConfigSource, notify func(string, string)) *HostServer {
@@ -130,13 +139,48 @@ func (s *HostServer) SetLogWriter(w io.Writer) {
 // PluginAdapter is the plugin-side glue between a Server implementation
 // of proto.PluginServer and go-plugin's plugin.Serve entrypoint. Plugin
 // authors construct one with their Server and pass it to plugin.Serve.
+//
+// To reach the host's Host service (Log/Notify/GetConfig), plugin code
+// calls HostClient() on the adapter. The first call dials the host's
+// brokered Host service; subsequent calls return the cached client.
+// Returns nil when the host does not expose the Host service or dialing
+// failed — plugin code should nil-check before calling.
 type PluginAdapter struct {
 	// Server is the plugin's proto.PluginServer implementation.
 	Server tauproto.PluginServer
-	// HostCallbacks is dialed at startup via the go-plugin broker; the
-	// plugin uses it to call Host.Log/Notify/GetConfig. May be nil;
-	// plugin code should nil-check before calling.
-	HostCallbacks tauproto.HostClient
+
+	// hostBroker is captured by GRPCServer before the plugin starts
+	// serving RPCs. HostClient() reads it under hostOnce.
+	hostBroker *plugin.GRPCBroker
+	hostOnce   sync.Once
+	hostClient tauproto.HostClient
+}
+
+// setHostBroker is called once from GRPCPlugin.GRPCServer to capture the
+// broker the plugin will dial for host callbacks. The plugin's main
+// goroutine calls this before plugin.Serve begins accepting RPCs, so the
+// happens-before is established by the time HostClient() runs from any
+// Execute handler.
+func (a *PluginAdapter) setHostBroker(b *plugin.GRPCBroker) {
+	a.hostBroker = b
+}
+
+// HostClient returns the host's Host service client (Log/Notify/GetConfig),
+// dialing it lazily on first call. Safe to call from any goroutine.
+// Returns nil if the host does not expose the Host service or dialing
+// failed; plugin code should nil-check before calling.
+func (a *PluginAdapter) HostClient() tauproto.HostClient {
+	a.hostOnce.Do(func() {
+		if a.hostBroker == nil {
+			return
+		}
+		conn, err := a.hostBroker.Dial(HostServiceBrokerID)
+		if err != nil {
+			return
+		}
+		a.hostClient = tauproto.NewHostClient(conn)
+	})
+	return a.hostClient
 }
 
 // ServerFactory is the name go-plugin dispenses (we registered a single
@@ -147,10 +191,12 @@ func (a *PluginAdapter) ServerFactory() *GRPCPlugin {
 }
 
 // PluginMap returns the plugin-side PluginMap for plugin.Serve. Exactly
-// one entry keyed by PluginName; its GRPCPlugin carries the Server.
+// one entry keyed by PluginName; its GRPCPlugin carries the Server and a
+// back-reference to this Adapter so GRPCServer can capture the broker
+// for HostClient() lazy dialing.
 func (a *PluginAdapter) PluginMap() map[string]plugin.Plugin {
 	return map[string]plugin.Plugin{
-		PluginName: &GRPCPlugin{ServerImpl: a.Server},
+		PluginName: &GRPCPlugin{ServerImpl: a.Server, Adapter: a},
 	}
 }
 
@@ -181,8 +227,9 @@ func (a *PluginAdapter) Serve() {
 // the host-side Host service on the same gRPC server as the broker.
 // Without this, plugin→host RPCs fail with "unknown service Host".
 //
-// The Manager sets this up by wrapping plugin.DefaultGRPCServer with a
-// registrar that calls tauproto.RegisterHostServer.
+// HostClient.Spawn populates plugin.ClientConfig.GRPCServer with the
+// return value so every spawned plugin subprocess can reach Host.Log,
+// Host.Notify, and Host.GetConfig through the broker-supplied connection.
 func HostGRPCRegistrar(host tauproto.HostServer) func(opts []grpc.ServerOption) *grpc.Server {
 	return func(opts []grpc.ServerOption) *grpc.Server {
 		srv := grpc.NewServer(opts...)

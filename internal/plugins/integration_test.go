@@ -1,10 +1,10 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -47,7 +47,7 @@ func buildMinimalPlugin(t *testing.T) string {
 // newTestHostServer returns a HostServer with discard sinks; tests can
 // swap fields after construction.
 func newTestHostServer() *HostServer {
-	return NewHostServer(io.Discard, NoopConfigSource(), func(string, string) {})
+	return NoopHostServer()
 }
 
 // installPluginBin relocates the built binary into a plugins/
@@ -102,12 +102,15 @@ func TestManager_SpawnListExecuteShutdown(t *testing.T) {
 	}()
 
 	toolsList := mgr.Tools()
-	if len(toolsList) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(toolsList))
+	if len(toolsList) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(toolsList))
 	}
-	names := []string{toolsList[0].Name(), toolsList[1].Name()}
-	if !containsStr(names, "minimal.echo") || !containsStr(names, "minimal.fail") {
-		t.Fatalf("expected minimal.echo and minimal.fail, got %v", names)
+	names := make([]string, len(toolsList))
+	for i, tl := range toolsList {
+		names[i] = tl.Name()
+	}
+	if !containsStr(names, "minimal.echo") || !containsStr(names, "minimal.fail") || !containsStr(names, "minimal.log") {
+		t.Fatalf("expected minimal.echo, minimal.fail, minimal.log; got %v", names)
 	}
 
 	// Execute echo.
@@ -296,6 +299,57 @@ func TestManager_NeverPolicyRefusesAfterCrash(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("RestartNever should make post-crash call return IsError; got %+v", res)
+	}
+}
+
+// TestManager_PluginCanCallHostLog verifies plugin→host RPCs reach the
+// HostServer registered on the go-plugin broker. The minimal.log tool
+// forwards its argument to Host.Log; the host's log writer must capture
+// the message. Exercises the full broker round-trip: plugin dials
+// HostServiceBrokerID via PluginAdapter.HostClient() and calls Host.Log
+// on the host-side HostServer registered through HostGRPCRegistrar.
+func TestManager_PluginCanCallHostLog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping plugin integration test in -short mode")
+	}
+	bin := buildMinimalPlugin(t)
+	projDir := t.TempDir()
+	pluginsDir := installPluginBin(t, bin, projDir)
+
+	var logBuf bytes.Buffer
+	hostSrv := NewHostServer(&logBuf, NoopConfigSource(), nil)
+
+	mgr, err := NewManager(pluginsDir, "", hostSrv)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := mgr.SpawnAll(ctx); err != nil {
+		t.Fatalf("SpawnAll: %v", err)
+	}
+	defer func() {
+		shutdownCtx, sc := context.WithTimeout(context.Background(), 10*time.Second)
+		defer sc()
+		_ = mgr.Shutdown(shutdownCtx)
+	}()
+
+	res, err := mgr.Execute(ctx, tools.ToolCall{
+		ID:   "log-call",
+		Name: "minimal.log",
+		Args: json.RawMessage(`{"text":"host-log-test"}`),
+		Cwd:  projDir,
+	})
+	if err != nil {
+		t.Fatalf("Execute minimal.log: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("minimal.log returned error: %+v", res)
+	}
+	if !strings.Contains(logBuf.String(), "host-log-test") {
+		t.Fatalf("Host.Log did not capture the forwarded message; log writer got %q", logBuf.String())
 	}
 }
 

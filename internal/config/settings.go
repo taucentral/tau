@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ThinkingLevel is the runtime thinking-effort selector.
@@ -157,6 +158,25 @@ type WarningSettings struct {
 	AnthropicExtraUsage *bool `json:"anthropicExtraUsage,omitempty"`
 }
 
+// PluginPin records the provenance of a plugin installed via `tau plugin
+// install`. It is the pin entry stored under Settings.Plugins keyed by
+// the plugin short name (the part after "tau-plugin-").
+//
+// Fields:
+//   - Source: the original install source string (HTTPS URL, GitHub
+//     shorthand, or local path) as the user typed it.
+//   - Version: the version label when known (GitHub release tag, or ""
+//     for local installs).
+//   - Sha256: the hex-encoded SHA-256 of the installed binary. Empty
+//     when no checksum was available at install time.
+//   - InstalledAt: when the pin was written. UTC.
+type PluginPin struct {
+	Source      string    `json:"source,omitempty"`
+	Version     string    `json:"version,omitempty"`
+	Sha256      string    `json:"sha256,omitempty"`
+	InstalledAt time.Time `json:"installedAt,omitempty"`
+}
+
 // Settings is the full settings tree loaded from settings.json. Fields are
 // pointers so we can distinguish "unset" (use parent default) from "set
 // to zero" (override the default). Pointer types also let the deep-merge
@@ -207,6 +227,7 @@ type Settings struct {
 	HTTPIdleTimeoutMs         *int                     `json:"httpIdleTimeoutMs,omitempty"`
 	WebSocketConnectTimeoutMs *int                     `json:"websocketConnectTimeoutMs,omitempty"`
 	Keybindings               map[string]Keybinding    `json:"keybindings,omitempty"`
+	Plugins                   map[string]PluginPin     `json:"plugins,omitempty"`
 }
 
 // DefaultSettings returns the canonical defaults applied when no override

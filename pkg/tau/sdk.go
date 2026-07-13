@@ -16,6 +16,7 @@ package tau
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/taucentral/tau/internal/llm/provider/openai"
 	"github.com/taucentral/tau/internal/orchestrator"
 	"github.com/taucentral/tau/internal/plugins"
+	tauproto "github.com/taucentral/tau/internal/proto"
 	"github.com/taucentral/tau/internal/slash"
 	"github.com/taucentral/tau/internal/storage"
 	"github.com/taucentral/tau/internal/state"
@@ -221,6 +223,52 @@ type AuthStore = config.AuthStore
 // Callers that want plugin tools in their session construct one, call
 // SpawnAll, and pass it via Options.Plugins.
 type PluginManager = plugins.Manager
+
+// PluginPin records the provenance of a plugin installed via the CLI's
+// plugin install command. It is the value type stored under
+// Settings.Plugins keyed by the plugin short name.
+type PluginPin = config.PluginPin
+
+// HostServer is the host-side gRPC service interface the plugin process
+// calls back to for Log, Notify, and GetConfig RPCs. Embedders that
+// want to observe plugin diagnostics or surface config to plugins
+// construct one via NewHostServer; those that don't pass NoopHostServer().
+type HostServer = tauproto.HostServer
+
+// ConfigSource resolves dotted-path configuration keys for Host.GetConfig.
+// Implementations are responsible for redacting sensitive keys.
+type ConfigSource = plugins.ConfigSource
+
+// ConfigSourceFunc is the func adapter for ConfigSource.
+type ConfigSourceFunc = plugins.ConfigSourceFunc
+
+// NoopHostServer returns a HostServer that discards everything. Use it
+// when constructing a PluginManager in embedders that don't need
+// plugin→host callbacks.
+func NoopHostServer() HostServer { return plugins.NoopHostServer() }
+
+// NewHostServer constructs a HostServer with the supplied log writer,
+// config source, and notify handler. nil cfg defaults to NoopConfigSource;
+// nil notify is a no-op; nil logWriter defaults to io.Discard.
+func NewHostServer(logWriter io.Writer, cfg ConfigSource, notify func(string, string)) HostServer {
+	return plugins.NewHostServer(logWriter, cfg, notify)
+}
+
+// NoopConfigSource returns a ConfigSource that resolves no keys.
+func NoopConfigSource() ConfigSource { return plugins.NoopConfigSource() }
+
+// NewPluginManager constructs a PluginManager rooted at projectDir and
+// globalDir. hostSrv must be non-nil (use NoopHostServer if you don't
+// need plugin→host callbacks).
+func NewPluginManager(projectDir, globalDir string, hostSrv HostServer) (*PluginManager, error) {
+	return plugins.NewManager(projectDir, globalDir, hostSrv)
+}
+
+// PluginsDir returns the plugin discovery directories for cwd. Index 0
+// is the global dir (<ConfigDir>/plugins); index 1 (when cwd != "") is
+// the project dir (<cwd>/.tau/plugins). Callers pass the result to
+// NewPluginManager as (projectDir, globalDir).
+func PluginsDir(cwd string) ([]string, error) { return config.PluginsDir(cwd) }
 
 // --- Slash commands ---------------------------------------------------------
 //
